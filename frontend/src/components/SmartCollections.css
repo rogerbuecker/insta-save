@@ -1,0 +1,124 @@
+.smart-collections {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto 24px;
+}
+
+.collections-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.collections-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clear-collection-btn {
+  background: var(--error-light);
+  color: var(--error);
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.clear-collection-btn:hover {
+  background: var(--error);
+  color: white;
+}
+
+.collections-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.collection-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.collection-item:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px var(--shadow-sm);
+}
+
+.collection-item.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: white;
+}
+
+.collection-item.active:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.collection-icon {
+  font-weight: 700;
+  font-size: 16px;
+  opacity: 0.7;
+}
+
+.collection-item.active .collection-icon {
+  opacity: 1;
+}
+
+.collection-name {
+  font-weight: 600;
+}
+
+.collection-count {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 24px;
+  text-align: center;
+}
+
+.collection-item.active .collection-count {
+  background: rgba(255, 255, 255, 0.3);
+  color: white;
+}
+
+@media (max-width: 768px) {
+  .smart-collections {
+    padding: 16px;
+  }
+
+  .collections-list {
+    gap: 8px;
+  }
+
+  .collection-item {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+}

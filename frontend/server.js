@@ -1,0 +1,651 @@
+import express from 'express';
+import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = 3001;
+
+app.use(cors());
+app.use(express.json());
+
+const METADATA_FILE = path.join(__dirname, '../saved_posts/metadata.json');
+
+// Helper function to read metadata
+function readMetadata() {
+  try {
+    if (fs.existsSync(METADATA_FILE)) {
+      const content = fs.readFileSync(METADATA_FILE, 'utf-8');
+      return JSON.parse(content);
+    }
+  } catch (error) {
+    console.error('Error reading metadata:', error);
+  }
+  return { posts: {}, categories: [] };
+}
+
+// Helper function to write metadata
+function writeMetadata(metadata) {
+  try {
+    fs.writeFileSync(METADATA_FILE, JSON.stringify(metadata, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Error writing metadata:', error);
+    return false;
+  }
+}
+
+// Serve images/videos from saved_posts directory
+app.use('/media', express.static(path.join(__dirname, '../saved_posts')));
+
+// Get all posts
+app.get('/api/posts', (req, res) => {
+  const postsDir = path.join(__dirname, '../saved_posts');
+
+  try {
+    const files = fs.readdirSync(postsDir);
+    const jsonFiles = files.filter(file => file.endsWith('.json') && file !== 'metadata.json');
+    const metadata = readMetadata();
+
+    const posts = jsonFiles.map(file => {
+      const filePath = path.join(postsDir, file);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const postData = JSON.parse(content);
+
+      const baseId = file.replace('.json', '');
+
+      // Check if local media files exist
+      const jpgPath = path.join(postsDir, `${baseId}.jpg`);
+      const mp4Path = path.join(postsDir, `${baseId}.mp4`);
+      const hasLocalImage = fs.existsSync(jpgPath);
+      const hasLocalVideo = fs.existsSync(mp4Path);
+
+      // Get post metadata
+      const postMeta = metadata.posts[baseId] || { categories: [], notes: '' };
+
+      // Build Instagram post URL from shortcode
+      const shortcode = postData.node?.shortcode || '';
+      const postUrl = shortcode ? `https://www.instagram.com/p/${shortcode}/` : '';
+
+      // Extract relevant information
+      const node = postData.node;
+      const isCarousel = node?.__typename === 'GraphSidecar';
+      const isVideo = node?.__typename === 'GraphVideo';
+
+      // Extract carousel items if this is a carousel post
+      const carouselItems = [];
+      if (isCarousel && node?.edge_sidecar_to_children?.edges) {
+        node.edge_sidecar_to_children.edges.forEach((edge, index) => {
+          const itemNode = edge.node;
+          const itemIsVideo = itemNode.__typename === 'GraphVideo';
+
+          // Check for local carousel media files
+          const carouselJpgPath = path.join(postsDir, `${baseId}_${index + 1}.jpg`);
+          const carouselMp4Path = path.join(postsDir, `${baseId}_${index + 1}.mp4`);
+          const hasCarouselImage = fs.existsSync(carouselJpgPath);
+          const hasCarouselVideo = fs.existsSync(carouselMp4Path);
+
+          carouselItems.push({
+            id: `${baseId}_${index + 1}`,
+            displayUrl: hasCarouselImage ? `/media/${baseId}_${index + 1}.jpg` : '',
+            isVideo: itemIsVideo,
+            videoUrl: hasCarouselVideo ? `/media/${baseId}_${index + 1}.mp4` : '',
+            altText: itemNode.accessibility_caption || '',
+            dimensions: itemNode.dimensions || { width: 0, height: 0 },
+            taggedUsers: extractTaggedUsers(itemNode.edge_media_to_tagged_user)
+          });
+        });
+      }
+
+      return {
+        id: baseId,
+        filename: file,
+        timestamp: file.split('_UTC')[0],
+        data: postData,
+        // Extract key fields for easier access
+        caption: node?.edge_media_to_caption?.edges[0]?.node?.text || '',
+        postUrl,
+        // ONLY use local media files from saved_posts directory
+        displayUrl: hasLocalImage ? `/media/${baseId}.jpg` : '',
+        isVideo,
+        videoUrl: hasLocalVideo ? `/media/${baseId}.mp4` : '',
+        owner: node?.owner?.username || 'unknown',
+        location: node?.location?.name || null,
+        hashtags: extractHashtags(node?.edge_media_to_caption?.edges[0]?.node?.text || ''),
+        // User metadata
+        categories: postMeta.categories || [],
+        notes: postMeta.notes || '',
+        // New enhanced fields
+        isCarousel,
+        carouselItems,
+        altText: node?.accessibility_caption || '',
+        taggedUsers: extractTaggedUsers(node?.edge_media_to_tagged_user),
+        engagement: {
+          likes: node?.edge_liked_by?.count || 0,
+          comments: node?.edge_media_to_comment?.count || 0
+        },
+        locationDetails: node?.location ? {
+          id: node.location.id,
+          name: node.location.name,
+          slug: node.location.slug
+        } : null
+      };
+    });
+
+    res.json(posts);
+  } catch (error) {
+    console.error('Error reading posts:', error);
+    res.status(500).json({ error: 'Failed to read posts' });
+  }
+});
+
+// Get single post by ID (formatted Post object)
+app.get('/api/posts/:id', (req, res) => {
+  const { id } = req.params;
+  const postsDir = path.join(__dirname, '../saved_posts');
+  const filePath = path.join(postsDir, `${id}.json`);
+
+  try {
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const postData = JSON.parse(content);
+    const metadata = readMetadata();
+    const node = postData.node;
+
+    if (!node) {
+      return res.status(404).json({ error: 'Invalid post data' });
+    }
+
+    // Get base ID from filename (remove .json extension)
+    const baseId = id;
+
+    // Check if image or video exists
+    const jpgPath = path.join(postsDir, `${baseId}.jpg`);
+    const mp4Path = path.join(postsDir, `${baseId}.mp4`);
+    const hasImage = fs.existsSync(jpgPath);
+    const hasVideo = fs.existsSync(mp4Path);
+
+    // Extract caption
+    const caption = node.edge_media_to_caption?.edges[0]?.node?.text || '';
+    const hashtags = extractHashtags(caption);
+
+    // Carousel support
+    const isCarousel = node.__typename === 'GraphSidecar';
+    const carouselItems = [];
+    if (isCarousel && node.edge_sidecar_to_children?.edges) {
+      node.edge_sidecar_to_children.edges.forEach((edge, index) => {
+        const itemNode = edge.node;
+        const itemIsVideo = itemNode.__typename === 'GraphVideo';
+        const carouselJpgPath = path.join(postsDir, `${baseId}_${index + 1}.jpg`);
+        const carouselMp4Path = path.join(postsDir, `${baseId}_${index + 1}.mp4`);
+        const hasCarouselImage = fs.existsSync(carouselJpgPath);
+        const hasCarouselVideo = fs.existsSync(carouselMp4Path);
+
+        carouselItems.push({
+          id: `${baseId}_${index + 1}`,
+          displayUrl: hasCarouselImage ? `/media/${baseId}_${index + 1}.jpg` : '',
+          isVideo: itemIsVideo,
+          videoUrl: hasCarouselVideo ? `/media/${baseId}_${index + 1}.mp4` : '',
+          altText: itemNode.accessibility_caption || '',
+          dimensions: itemNode.dimensions || { width: 0, height: 0 },
+          taggedUsers: extractTaggedUsers(itemNode.edge_media_to_tagged_user)
+        });
+      });
+    }
+
+    const post = {
+      id: baseId,
+      filename: `${baseId}.json`,
+      timestamp: baseId,
+      data: postData,
+      caption,
+      postUrl: `https://www.instagram.com/p/${node.shortcode}/`,
+      displayUrl: hasImage ? `/media/${baseId}.jpg` : '',
+      isVideo: node.__typename === 'GraphVideo',
+      videoUrl: hasVideo ? `/media/${baseId}.mp4` : '',
+      owner: node.owner?.username || 'unknown',
+      location: node.location?.name || null,
+      hashtags,
+      categories: metadata.posts[baseId]?.categories || [],
+      notes: metadata.posts[baseId]?.notes || '',
+      isCarousel,
+      carouselItems,
+      altText: node.accessibility_caption || '',
+      taggedUsers: extractTaggedUsers(node.edge_media_to_tagged_user),
+      engagement: {
+        likes: node.edge_liked_by?.count || 0,
+        comments: node.edge_media_to_comment?.count || 0
+      },
+      locationDetails: node.location ? {
+        id: node.location.id,
+        name: node.location.name,
+        slug: node.location.slug
+      } : null
+    };
+
+    res.json(post);
+  } catch (error) {
+    console.error('Error reading post:', error);
+    res.status(500).json({ error: 'Failed to read post' });
+  }
+});
+
+// Get categories
+app.get('/api/categories', (req, res) => {
+  try {
+    const metadata = readMetadata();
+    res.json(metadata.categories || []);
+  } catch (error) {
+    console.error('Error reading categories:', error);
+    res.status(500).json({ error: 'Failed to read categories' });
+  }
+});
+
+// Add category
+app.post('/api/categories', (req, res) => {
+  try {
+    const { category } = req.body;
+    if (!category || typeof category !== 'string') {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+
+    const metadata = readMetadata();
+    if (!metadata.categories.includes(category)) {
+      metadata.categories.push(category);
+      writeMetadata(metadata);
+    }
+    res.json(metadata.categories);
+  } catch (error) {
+    console.error('Error adding category:', error);
+    res.status(500).json({ error: 'Failed to add category' });
+  }
+});
+
+// Update post metadata (categories and notes)
+app.put('/api/posts/:id/metadata', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { categories, notes } = req.body;
+
+    const metadata = readMetadata();
+
+    if (!metadata.posts[id]) {
+      metadata.posts[id] = {};
+    }
+
+    if (categories !== undefined) {
+      metadata.posts[id].categories = Array.isArray(categories) ? categories : [];
+    }
+
+    if (notes !== undefined) {
+      metadata.posts[id].notes = notes;
+    }
+
+    if (writeMetadata(metadata)) {
+      res.json({ success: true, metadata: metadata.posts[id] });
+    } else {
+      res.status(500).json({ error: 'Failed to save metadata' });
+    }
+  } catch (error) {
+    console.error('Error updating post metadata:', error);
+    res.status(500).json({ error: 'Failed to update metadata' });
+  }
+});
+
+// Delete post
+app.delete('/api/posts/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const postsDir = path.join(__dirname, '../saved_posts');
+
+    // Delete JSON file
+    const jsonPath = path.join(postsDir, `${id}.json`);
+    if (fs.existsSync(jsonPath)) {
+      fs.unlinkSync(jsonPath);
+    }
+
+    // Delete main image/video files
+    const jpgPath = path.join(postsDir, `${id}.jpg`);
+    if (fs.existsSync(jpgPath)) {
+      fs.unlinkSync(jpgPath);
+    }
+
+    const mp4Path = path.join(postsDir, `${id}.mp4`);
+    if (fs.existsSync(mp4Path)) {
+      fs.unlinkSync(mp4Path);
+    }
+
+    // Delete carousel media files (up to 20 items should be enough)
+    for (let i = 1; i <= 20; i++) {
+      const carouselJpg = path.join(postsDir, `${id}_${i}.jpg`);
+      const carouselMp4 = path.join(postsDir, `${id}_${i}.mp4`);
+
+      if (fs.existsSync(carouselJpg)) {
+        fs.unlinkSync(carouselJpg);
+      }
+      if (fs.existsSync(carouselMp4)) {
+        fs.unlinkSync(carouselMp4);
+      }
+    }
+
+    // Remove from metadata
+    const metadata = readMetadata();
+    if (metadata.posts[id]) {
+      delete metadata.posts[id];
+      writeMetadata(metadata);
+    }
+
+    res.json({ success: true, message: 'Post deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting post:', error);
+    res.status(500).json({ error: 'Failed to delete post' });
+  }
+});
+
+// AI Category Suggestions - keyword mapping
+const CATEGORY_KEYWORDS = {
+  "Recipes": ["recipe", "cook", "food", "ingredient", "meal", "bake", "#recipe", "#cooking", "#food", "#foodie", "#yummy"],
+  "DIY": ["diy", "craft", "make", "build", "handmade", "#diy", "#craft", "#handmade", "#crafts", "selbstgemacht"],
+  "Tutorial": ["tutorial", "how to", "guide", "step", "learn", "#tutorial", "anleitung", "lernen"],
+  "Funny": ["funny", "hilarious", "laugh", "humor", "comedy", "#funny", "#meme", "#lol", "lustig"],
+  "Ideas": ["idea", "inspiration", "creative", "#inspo", "#ideas", "idee"],
+  "Projects": ["project", "build", "design", "#project", "projekt"],
+  "Watch Later": [], // Manual only
+  "Inspiration": ["inspiration", "inspire", "beautiful", "#inspiration", "#inspo", "inspired"]
+};
+
+// Get AI-suggested categories for a post
+app.get('/api/posts/:id/suggest-categories', (req, res) => {
+  try {
+    const { id } = req.params;
+    const filePath = path.join(__dirname, '../saved_posts', `${id}.json`);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const postData = JSON.parse(content);
+
+    const caption = postData.node?.edge_media_to_caption?.edges[0]?.node?.text || '';
+    const hashtags = extractHashtags(caption);
+    const text = (caption + ' ' + hashtags.join(' ')).toLowerCase();
+
+    const suggestions = [];
+    for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+      if (keywords.length === 0) continue; // Skip manual-only categories
+
+      const matches = keywords.filter(kw => text.includes(kw.toLowerCase()));
+      if (matches.length > 0) {
+        suggestions.push({
+          category,
+          confidence: Math.min(100, matches.length * 30),
+          matchedKeywords: matches.slice(0, 3) // Limit to top 3 keywords
+        });
+      }
+    }
+
+    // Sort by confidence and return top 3
+    res.json(suggestions.sort((a, b) => b.confidence - a.confidence).slice(0, 3));
+  } catch (error) {
+    console.error('Error suggesting categories:', error);
+    res.status(500).json({ error: 'Failed to suggest categories' });
+  }
+});
+
+// Get duplicates
+app.get('/api/duplicates', (req, res) => {
+  try {
+    const postsDir = path.join(__dirname, '../saved_posts');
+    const files = fs.readdirSync(postsDir);
+    const jsonFiles = files.filter(file => file.endsWith('.json') && file !== 'metadata.json');
+
+    const posts = jsonFiles.map(file => {
+      const filePath = path.join(postsDir, file);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const postData = JSON.parse(content);
+      const baseId = file.replace('.json', '');
+
+      return {
+        id: baseId,
+        owner: postData.node?.owner?.username || '',
+        caption: postData.node?.edge_media_to_caption?.edges[0]?.node?.text || '',
+        timestamp: file.split('_UTC')[0]
+      };
+    });
+
+    const duplicates = detectDuplicates(posts);
+    res.json(duplicates);
+  } catch (error) {
+    console.error('Error detecting duplicates:', error);
+    res.status(500).json({ error: 'Failed to detect duplicates' });
+  }
+});
+
+// Auto-clean exact duplicates
+app.post('/api/duplicates/auto-clean', (req, res) => {
+  try {
+    const postsDir = path.join(__dirname, '../saved_posts');
+    const files = fs.readdirSync(postsDir);
+    const jsonFiles = files.filter(file => file.endsWith('.json') && file !== 'metadata.json');
+
+    const posts = jsonFiles.map(file => {
+      const filePath = path.join(postsDir, file);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const postData = JSON.parse(content);
+      const baseId = file.replace('.json', '');
+
+      return {
+        id: baseId,
+        owner: postData.node?.owner?.username || '',
+        caption: postData.node?.edge_media_to_caption?.edges[0]?.node?.text || '',
+        timestamp: file.split('_UTC')[0]
+      };
+    });
+
+    const allDuplicates = detectDuplicates(posts);
+    const exactDuplicates = allDuplicates.filter(d => d.matchType === 'exact');
+    const deletedIds = [];
+
+    for (const dup of exactDuplicates) {
+      // Keep first post, delete second
+      deletePostById(dup.postIds[1]);
+      deletedIds.push(dup.postIds[1]);
+    }
+
+    res.json({ deletedCount: deletedIds.length, deletedIds });
+  } catch (error) {
+    console.error('Error auto-cleaning duplicates:', error);
+    res.status(500).json({ error: 'Failed to auto-clean duplicates' });
+  }
+});
+
+// Merge duplicate metadata
+app.post('/api/duplicates/merge', (req, res) => {
+  try {
+    const { keepId, deleteId } = req.body;
+
+    if (!keepId || !deleteId) {
+      return res.status(400).json({ error: 'keepId and deleteId are required' });
+    }
+
+    const metadata = readMetadata();
+    const keepMeta = metadata.posts[keepId] || { categories: [], notes: '' };
+    const deleteMeta = metadata.posts[deleteId] || { categories: [], notes: '' };
+
+    // Merge categories (union)
+    const mergedCategories = [...new Set([...keepMeta.categories, ...deleteMeta.categories])];
+
+    // Merge notes (concatenate with separator)
+    const mergedNotes = [keepMeta.notes, deleteMeta.notes]
+      .filter(n => n && n.trim())
+      .join('\n---\n');
+
+    // Update keep post metadata
+    metadata.posts[keepId] = {
+      categories: mergedCategories,
+      notes: mergedNotes
+    };
+
+    // Delete the duplicate post
+    deletePostById(deleteId);
+
+    // Remove from metadata
+    if (metadata.posts[deleteId]) {
+      delete metadata.posts[deleteId];
+    }
+
+    writeMetadata(metadata);
+
+    res.json({ success: true, mergedCategories, mergedNotes });
+  } catch (error) {
+    console.error('Error merging duplicates:', error);
+    res.status(500).json({ error: 'Failed to merge duplicates' });
+  }
+});
+
+// Helper function to delete post by ID
+function deletePostById(id) {
+  const postsDir = path.join(__dirname, '../saved_posts');
+
+  // Delete JSON file
+  const jsonPath = path.join(postsDir, `${id}.json`);
+  if (fs.existsSync(jsonPath)) {
+    fs.unlinkSync(jsonPath);
+  }
+
+  // Delete main media files
+  const jpgPath = path.join(postsDir, `${id}.jpg`);
+  if (fs.existsSync(jpgPath)) {
+    fs.unlinkSync(jpgPath);
+  }
+
+  const mp4Path = path.join(postsDir, `${id}.mp4`);
+  if (fs.existsSync(mp4Path)) {
+    fs.unlinkSync(mp4Path);
+  }
+
+  // Delete carousel media files
+  for (let i = 1; i <= 20; i++) {
+    const carouselJpg = path.join(postsDir, `${id}_${i}.jpg`);
+    const carouselMp4 = path.join(postsDir, `${id}_${i}.mp4`);
+
+    if (fs.existsSync(carouselJpg)) {
+      fs.unlinkSync(carouselJpg);
+    }
+    if (fs.existsSync(carouselMp4)) {
+      fs.unlinkSync(carouselMp4);
+    }
+  }
+}
+
+// Helper function to detect duplicates
+function detectDuplicates(posts) {
+  const duplicates = [];
+
+  for (let i = 0; i < posts.length; i++) {
+    for (let j = i + 1; j < posts.length; j++) {
+      const p1 = posts[i];
+      const p2 = posts[j];
+
+      // Parse timestamps
+      const time1 = parseTimestamp(p1.timestamp);
+      const time2 = parseTimestamp(p2.timestamp);
+      const timeDiff = Math.abs(time1 - time2);
+
+      // EXACT match (within 1 hour)
+      if (p1.owner === p2.owner &&
+          p1.caption === p2.caption &&
+          timeDiff < 3600000) { // 1 hour in ms
+        duplicates.push({
+          postIds: [p1.id, p2.id],
+          matchScore: 100,
+          reason: 'Exact: same owner, caption, and time (within 1 hour)',
+          matchType: 'exact'
+        });
+      }
+      // SIMILAR match (within 24 hours)
+      else if (p1.owner === p2.owner &&
+               calculateSimilarity(p1.caption, p2.caption) > 0.8 &&
+               timeDiff < 86400000) { // 24 hours in ms
+        duplicates.push({
+          postIds: [p1.id, p2.id],
+          matchScore: Math.round(calculateSimilarity(p1.caption, p2.caption) * 100),
+          reason: 'Similar: same owner, similar caption, within 24h',
+          matchType: 'similar'
+        });
+      }
+    }
+  }
+
+  return duplicates.sort((a, b) => b.matchScore - a.matchScore);
+}
+
+// Helper function to parse timestamp from filename
+function parseTimestamp(timestamp) {
+  // Format: 2024-07-26_15-15-24
+  const parts = timestamp.split('_');
+  if (parts.length !== 2) return 0;
+
+  const dateParts = parts[0].split('-');
+  const timeParts = parts[1].split('-');
+
+  if (dateParts.length !== 3 || timeParts.length !== 3) return 0;
+
+  const date = new Date(
+    parseInt(dateParts[0]),
+    parseInt(dateParts[1]) - 1,
+    parseInt(dateParts[2]),
+    parseInt(timeParts[0]),
+    parseInt(timeParts[1]),
+    parseInt(timeParts[2])
+  );
+
+  return date.getTime();
+}
+
+// Helper function to calculate string similarity (simple Jaccard similarity)
+function calculateSimilarity(str1, str2) {
+  if (!str1 || !str2) return 0;
+  if (str1 === str2) return 1;
+
+  const words1 = new Set(str1.toLowerCase().split(/\s+/));
+  const words2 = new Set(str2.toLowerCase().split(/\s+/));
+
+  const intersection = new Set([...words1].filter(x => words2.has(x)));
+  const union = new Set([...words1, ...words2]);
+
+  return intersection.size / union.size;
+}
+
+// Helper function to extract tagged users
+function extractTaggedUsers(edgeMediaToTaggedUser) {
+  if (!edgeMediaToTaggedUser?.edges) return [];
+
+  return edgeMediaToTaggedUser.edges.map(edge => ({
+    id: edge.node.user.id,
+    username: edge.node.user.username,
+    fullName: edge.node.user.full_name || '',
+    x: edge.node.x || 0,
+    y: edge.node.y || 0
+  }));
+}
+
+// Helper function to extract hashtags
+function extractHashtags(text) {
+  if (!text) return [];
+  const hashtagRegex = /#[\w\u00C0-\u024F\u1E00-\u1EFF]+/g;
+  const matches = text.match(hashtagRegex);
+  return matches ? matches.map(tag => tag.toLowerCase()) : [];
+}
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
