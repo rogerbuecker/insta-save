@@ -33,6 +33,43 @@ class InstagramSavedPostsScraper:
         self.username = username
         self.session_file = session_file
 
+    def _load_existing_shortcodes(self, output_dir):
+        """
+        Scan existing post JSON files in the output directory and extract shortcodes.
+        Returns a set of shortcodes that have already been downloaded.
+        """
+        existing = set()
+        output_path = Path(output_dir)
+        if not output_path.exists():
+            return existing
+
+        for json_file in output_path.glob("*.json"):
+            # Skip non-post files
+            if json_file.name in ("metadata.json", "saved_posts_summary.json"):
+                continue
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                shortcode = data.get("node", {}).get("shortcode")
+                if shortcode:
+                    existing.add(shortcode)
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        return existing
+
+    def _load_existing_summary(self, output_dir):
+        """Load existing summary data so new posts can be merged in."""
+        summary_file = os.path.join(output_dir, "saved_posts_summary.json")
+        if os.path.exists(summary_file):
+            try:
+                with open(summary_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return {p['shortcode']: p for p in data.get('posts', [])}
+            except (json.JSONDecodeError, KeyError):
+                pass
+        return {}
+
     def login(self, username=None, password=None):
         """
         Login to Instagram
@@ -90,14 +127,22 @@ class InstagramSavedPostsScraper:
             print(f"Error during login: {str(e)}")
             return False
 
-    def get_saved_posts(self, output_dir="saved_posts", limit=None):
+    def get_saved_posts(self, output_dir="saved_posts", limit=None, full_resync=False):
         """
-        Fetch and download saved posts
+        Fetch and download saved posts incrementally.
+
+        On subsequent runs, only new posts (not already in the output directory)
+        are downloaded. Once enough consecutive already-downloaded posts are seen,
+        the crawler stops early since Instagram returns saved posts newest-first.
 
         Args:
             output_dir: Directory to save posts
-            limit: Maximum number of posts to download (None for all)
+            limit: Maximum number of *new* posts to download (None for all)
+            full_resync: If True, skip early stopping and check every post
         """
+        # Number of consecutive already-downloaded posts before stopping early.
+        EARLY_STOP_THRESHOLD = 20
+
         try:
             if not self.username:
                 print("Error: Not logged in")
@@ -106,29 +151,65 @@ class InstagramSavedPostsScraper:
             # Create output directory
             Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-            print(f"\nFetching saved posts for {self.username}...")
-            profile = instaloader.Profile.from_username(self.loader.context, self.username)
+            # Load index of already-downloaded posts
+            existing_shortcodes = self._load_existing_shortcodes(output_dir)
+            existing_summary = self._load_existing_summary(output_dir)
+
+            if existing_shortcodes:
+                print(f"\nFound {len(existing_shortcodes)} previously downloaded posts")
+            else:
+                print("\nNo previous downloads found — performing full download")
+
+            print(f"Fetching saved posts for {self.username}...")
+            # Get user ID from session cookies to avoid the heavily
+            # rate-limited web_profile_info endpoint (from_username).
+            user_id = self.loader.context._session.cookies.get('ds_user_id')
+            if user_id:
+                profile = instaloader.Profile.from_id(self.loader.context, int(user_id))
+            else:
+                profile = instaloader.Profile.from_username(self.loader.context, self.username)
 
             saved_posts = profile.get_saved_posts()
 
-            posts_data = []
-            count = 0
+            new_posts = []
+            skipped = 0
+            consecutive_known = 0
+            checked = 0
 
-            print(f"Starting download to {output_dir}/\n")
+            is_incremental = len(existing_shortcodes) > 0
+            mode = "Syncing new" if is_incremental else "Downloading"
+            print(f"{mode} posts to {output_dir}/\n")
 
             for post in saved_posts:
-                if limit and count >= limit:
+                # Stop if we've downloaded enough new posts
+                if limit and len(new_posts) >= limit:
+                    print(f"Reached download limit of {limit} new posts")
                     break
 
-                count += 1
-                print(f"[{count}] Downloading post from @{post.owner_username}")
+                checked += 1
+
+                # Skip posts we already have
+                if post.shortcode in existing_shortcodes:
+                    skipped += 1
+                    consecutive_known += 1
+
+                    # Early stop: if we've seen many consecutive known posts,
+                    # we've caught up to the previous download boundary
+                    if not full_resync and is_incremental and consecutive_known >= EARLY_STOP_THRESHOLD:
+                        print(f"  Seen {EARLY_STOP_THRESHOLD} consecutive known posts — caught up!")
+                        break
+
+                    continue
+
+                # Reset consecutive counter when we find a new post
+                consecutive_known = 0
+
+                print(f"[new {len(new_posts)+1}] Downloading post from @{post.owner_username}")
                 print(f"    URL: https://www.instagram.com/p/{post.shortcode}/")
 
                 try:
-                    # Download post
                     self.loader.download_post(post, target=output_dir)
 
-                    # Collect metadata
                     post_info = {
                         'shortcode': post.shortcode,
                         'url': f"https://www.instagram.com/p/{post.shortcode}/",
@@ -141,7 +222,7 @@ class InstagramSavedPostsScraper:
                         'video_url': post.video_url if post.is_video else None,
                         'typename': post.typename
                     }
-                    posts_data.append(post_info)
+                    new_posts.append(post_info)
 
                     print(f"    ✓ Downloaded successfully\n")
 
@@ -149,21 +230,30 @@ class InstagramSavedPostsScraper:
                     print(f"    ✗ Error downloading post: {str(e)}\n")
                     continue
 
-            # Save summary JSON
+            # Merge new posts into existing summary
+            for p in new_posts:
+                existing_summary[p['shortcode']] = p
+
             summary_file = os.path.join(output_dir, "saved_posts_summary.json")
             with open(summary_file, 'w', encoding='utf-8') as f:
                 json.dump({
                     'username': self.username,
                     'download_date': datetime.now().isoformat(),
-                    'total_posts': len(posts_data),
-                    'posts': posts_data
+                    'total_posts': len(existing_summary),
+                    'posts': list(existing_summary.values())
                 }, f, indent=2, ensure_ascii=False)
 
             print(f"\n{'='*50}")
-            print(f"✓ Download complete!")
-            print(f"  Total posts downloaded: {len(posts_data)}")
+            if is_incremental:
+                print(f"✓ Sync complete!")
+                print(f"  New posts downloaded: {len(new_posts)}")
+                print(f"  Already had: {skipped}")
+                print(f"  Posts checked: {checked}")
+                print(f"  Total posts in library: {len(existing_summary)}")
+            else:
+                print(f"✓ Download complete!")
+                print(f"  Total posts downloaded: {len(new_posts)}")
             print(f"  Output directory: {output_dir}/")
-            print(f"  Summary file: {summary_file}")
             print(f"{'='*50}")
 
         except instaloader.exceptions.LoginRequiredException:
@@ -174,6 +264,15 @@ class InstagramSavedPostsScraper:
 
 def main():
     """Main function"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Instagram Saved Posts Scraper")
+    parser.add_argument("--full-resync", action="store_true",
+                        help="Check all saved posts instead of stopping early at known posts")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Maximum number of new posts to download")
+    args = parser.parse_args()
+
     print("="*50)
     print("Instagram Saved Posts Scraper")
     print("="*50 + "\n")
@@ -196,10 +295,13 @@ def main():
 
                 scraper = InstagramSavedPostsScraper(username=username, session_file=session_file)
                 if scraper.login():
-                    limit_input = input("\nEnter max number of posts to download (press Enter for all): ")
-                    limit = int(limit_input) if limit_input.strip() else None
+                    if args.limit is None and not args.full_resync:
+                        limit_input = input("\nEnter max number of new posts to download (press Enter for all): ")
+                        limit = int(limit_input) if limit_input.strip() else None
+                    else:
+                        limit = args.limit
 
-                    scraper.get_saved_posts(limit=limit)
+                    scraper.get_saved_posts(limit=limit, full_resync=args.full_resync)
                 return
 
     # New login
@@ -212,10 +314,13 @@ def main():
     scraper = InstagramSavedPostsScraper(username=username)
 
     if scraper.login(username, password):
-        limit_input = input("\nEnter max number of posts to download (press Enter for all): ")
-        limit = int(limit_input) if limit_input.strip() else None
+        if args.limit is None and not args.full_resync:
+            limit_input = input("\nEnter max number of new posts to download (press Enter for all): ")
+            limit = int(limit_input) if limit_input.strip() else None
+        else:
+            limit = args.limit
 
-        scraper.get_saved_posts(limit=limit)
+        scraper.get_saved_posts(limit=limit, full_resync=args.full_resync)
 
 
 if __name__ == "__main__":
