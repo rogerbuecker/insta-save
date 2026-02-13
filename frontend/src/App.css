@@ -61,6 +61,28 @@
   position: relative;
 }
 
+.account-switcher {
+  padding: 8px 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  outline: none;
+}
+
+.account-switcher:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.account-switcher option {
+  color: #333;
+  background: white;
+}
+
 .theme-toggle-btn {
   position: absolute;
   left: 24px;

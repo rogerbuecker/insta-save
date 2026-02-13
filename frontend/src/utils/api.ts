@@ -2,6 +2,18 @@ import { API_URL } from '../config';
 
 const STORAGE_KEY = 'api-secret';
 
+// --- Account management ---
+
+let currentAccount = '';
+
+export function setCurrentAccount(account: string): void {
+  currentAccount = account;
+}
+
+export function getCurrentAccount(): string {
+  return currentAccount;
+}
+
 // --- Secret management ---
 
 export function getApiSecret(): string {
@@ -44,7 +56,12 @@ export async function apiFetch(
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const separator = path.includes('?') ? '&' : '?';
+  const url = currentAccount
+    ? `${API_URL}${path}${separator}account=${encodeURIComponent(currentAccount)}`
+    : `${API_URL}${path}`;
+
+  const response = await fetch(url, { ...options, headers });
 
   if (response.status === 401) {
     clearApiSecret();

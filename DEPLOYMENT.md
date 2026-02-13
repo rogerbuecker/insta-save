@@ -59,17 +59,21 @@ When prompted:
 | provider | `Cloudflare` |
 | access_key_id | *(paste your Access Key ID)* |
 | secret_access_key | *(paste your Secret Access Key)* |
-| endpoint | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| endpoint | `https://4ec834a5824d169fec0c22bc41f60022.r2.cloudflarestorage.com` |
 
 Find your Account ID on the R2 overview page in the dashboard (right sidebar). Accept defaults for everything else.
 
 ### Set the Environment Variable
 
 ```bash
+# bash/zsh
 export RCLONE_REMOTE=r2:insta-save
+
+# fish
+set -Ux RCLONE_REMOTE r2:insta-save
 ```
 
-Add this to your `~/.bashrc` or `~/.zshrc` so it persists across sessions.
+For bash/zsh, add the `export` line to `~/.bashrc` or `~/.zshrc`. For fish, the `set -Ux` command persists it automatically (universal export).
 
 ---
 

@@ -3,10 +3,19 @@ interface Env {
   R2_BUCKET: R2Bucket;
 }
 
+function getAccount(request: Request): string | null {
+  return new URL(request.url).searchParams.get("account");
+}
+
 export const onRequestGet: PagesFunction<Env> = async (context) => {
+  const account = getAccount(context.request);
+  if (!account) {
+    return Response.json({ error: "account parameter is required" }, { status: 400, headers: corsHeaders() });
+  }
+
   const bucket = context.env.R2_BUCKET;
 
-  const indexObj = await bucket.get("posts-index.json");
+  const indexObj = await bucket.get(`${account}/posts-index.json`);
   if (!indexObj) {
     return Response.json([], { headers: corsHeaders() });
   }

@@ -3,6 +3,10 @@ interface Env {
   R2_BUCKET: R2Bucket;
 }
 
+function getAccount(request: Request): string | null {
+  return new URL(request.url).searchParams.get("account");
+}
+
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
   Recipes: ["recipe", "cook", "food", "ingredient", "meal", "bake", "#recipe", "#cooking", "#food", "#foodie", "#yummy"],
   DIY: ["diy", "craft", "make", "build", "handmade", "#diy", "#craft", "#handmade", "#crafts", "selbstgemacht"],
@@ -14,10 +18,15 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
 };
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
+  const account = getAccount(context.request);
+  if (!account) {
+    return Response.json({ error: "account parameter is required" }, { status: 400, headers: corsHeaders() });
+  }
+
   const id = context.params.id as string;
   const bucket = context.env.R2_BUCKET;
 
-  const indexObj = await bucket.get("posts-index.json");
+  const indexObj = await bucket.get(`${account}/posts-index.json`);
   if (!indexObj) {
     return Response.json({ error: "Post not found" }, { status: 404, headers: corsHeaders() });
   }

@@ -3,22 +3,31 @@ interface Env {
   R2_BUCKET: R2Bucket;
 }
 
-async function readMetadata(bucket: R2Bucket) {
-  const obj = await bucket.get("metadata.json");
+function getAccount(request: Request): string | null {
+  return new URL(request.url).searchParams.get("account");
+}
+
+async function readMetadata(bucket: R2Bucket, account: string) {
+  const obj = await bucket.get(`${account}/metadata.json`);
   if (!obj) return { posts: {} as Record<string, any>, categories: [] as string[] };
   return obj.json<{ posts: Record<string, any>; categories: string[] }>();
 }
 
-async function writeMetadata(bucket: R2Bucket, metadata: any) {
-  await bucket.put("metadata.json", JSON.stringify(metadata, null, 2), {
+async function writeMetadata(bucket: R2Bucket, account: string, metadata: any) {
+  await bucket.put(`${account}/metadata.json`, JSON.stringify(metadata, null, 2), {
     httpMetadata: { contentType: "application/json" },
   });
 }
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
+  const account = getAccount(context.request);
+  if (!account) {
+    return Response.json({ error: "account parameter is required" }, { status: 400, headers: corsHeaders() });
+  }
+
   const bucket = context.env.R2_BUCKET;
 
-  const indexObj = await bucket.get("posts-index.json");
+  const indexObj = await bucket.get(`${account}/posts-index.json`);
   if (!indexObj) {
     return Response.json({ deletedCount: 0, deletedIds: [] }, { headers: corsHeaders() });
   }
@@ -29,24 +38,22 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
   for (const dup of exactDuplicates) {
     const idToDelete = dup.postIds[1];
-    if (deletedIds.includes(idToDelete)) continue; // already queued
+    if (deletedIds.includes(idToDelete)) continue;
 
-    await deletePostFiles(bucket, idToDelete);
+    await deletePostFiles(bucket, account, idToDelete);
     deletedIds.push(idToDelete);
   }
 
   if (deletedIds.length > 0) {
-    // Remove deleted posts from metadata
-    const metadata = await readMetadata(bucket);
+    const metadata = await readMetadata(bucket, account);
     for (const id of deletedIds) {
       delete metadata.posts[id];
     }
-    await writeMetadata(bucket, metadata);
+    await writeMetadata(bucket, account, metadata);
 
-    // Remove deleted posts from index
     const deletedSet = new Set(deletedIds);
     const filtered = posts.filter((p: any) => !deletedSet.has(p.id));
-    await bucket.put("posts-index.json", JSON.stringify(filtered), {
+    await bucket.put(`${account}/posts-index.json`, JSON.stringify(filtered), {
       httpMetadata: { contentType: "application/json" },
     });
   }
@@ -74,14 +81,14 @@ function corsHeaders(): HeadersInit {
 
 // --- helpers ---
 
-async function deletePostFiles(bucket: R2Bucket, id: string) {
+async function deletePostFiles(bucket: R2Bucket, account: string, id: string) {
   const keysToDelete: string[] = [];
   for (const ext of [".json", ".jpg", ".mp4"]) {
-    keysToDelete.push(`${id}${ext}`);
+    keysToDelete.push(`${account}/${id}${ext}`);
   }
   for (let i = 1; i <= 20; i++) {
-    keysToDelete.push(`${id}_${i}.jpg`);
-    keysToDelete.push(`${id}_${i}.mp4`);
+    keysToDelete.push(`${account}/${id}_${i}.jpg`);
+    keysToDelete.push(`${account}/${id}_${i}.mp4`);
   }
   await Promise.all(keysToDelete.map((key) => bucket.delete(key)));
 }

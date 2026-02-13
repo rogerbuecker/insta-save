@@ -15,4 +15,4 @@ bucket_name = "insta-save"
 # Enable public access on your R2 bucket in the Cloudflare dashboard,
 # then paste the public URL here.
 [vars]
-R2_PUBLIC_URL = ""
+R2_PUBLIC_URL = "https://pub-764d6cc304ed471c8b41792819cf420f.r2.dev"

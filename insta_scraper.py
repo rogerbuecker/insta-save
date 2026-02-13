@@ -61,6 +61,17 @@ class InstagramSavedPostsScraper:
 
         return existing
 
+    def update_accounts_list(self, base_dir="saved_posts"):
+        """Update accounts.json with all account subdirectories."""
+        base = Path(base_dir)
+        accounts = sorted([
+            d.name for d in base.iterdir()
+            if d.is_dir() and (d / "posts-index.json").exists()
+        ])
+        with open(base / "accounts.json", "w") as f:
+            json.dump(accounts, f)
+        print(f"Updated accounts.json: {accounts}")
+
     def sync_to_cloud(self, output_dir="saved_posts"):
         """Push local saved_posts to cloud storage using rclone."""
         remote = os.environ.get('RCLONE_REMOTE', '')
@@ -400,6 +411,18 @@ def main():
     print("Instagram Saved Posts Scraper")
     print("="*50 + "\n")
 
+    # Migration check: warn if posts exist in old flat layout
+    base = Path("saved_posts")
+    if base.exists():
+        old_files = [f for f in base.glob("*.json") if f.name not in ("accounts.json",)]
+        if old_files:
+            print("⚠  Found posts in saved_posts/ root (old layout).")
+            print("   Multi-account support stores posts in saved_posts/<username>/")
+            print("   Move your existing files, e.g.:")
+            print("     mkdir -p saved_posts/YOUR_USERNAME")
+            print("     mv saved_posts/*.json saved_posts/*.jpg saved_posts/*.mp4 saved_posts/YOUR_USERNAME/")
+            print()
+
     scraper = InstagramSavedPostsScraper()
 
     # Pull mode: download from cloud and exit
@@ -431,8 +454,10 @@ def main():
                     else:
                         limit = args.limit
 
-                    scraper.get_saved_posts(limit=limit, full_resync=args.full_resync)
-                    scraper.build_index()
+                    output_dir = f"saved_posts/{username}"
+                    scraper.get_saved_posts(limit=limit, full_resync=args.full_resync, output_dir=output_dir)
+                    scraper.build_index(output_dir=output_dir)
+                    scraper.update_accounts_list()
                     if not args.no_sync:
                         scraper.sync_to_cloud()
                 return
@@ -453,8 +478,10 @@ def main():
         else:
             limit = args.limit
 
-        scraper.get_saved_posts(limit=limit, full_resync=args.full_resync)
-        scraper.build_index()
+        output_dir = f"saved_posts/{username}"
+        scraper.get_saved_posts(limit=limit, full_resync=args.full_resync, output_dir=output_dir)
+        scraper.build_index(output_dir=output_dir)
+        scraper.update_accounts_list()
         if not args.no_sync:
             scraper.sync_to_cloud()
 

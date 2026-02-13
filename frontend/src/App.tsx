@@ -6,7 +6,8 @@ import DuplicateDetection from './components/DuplicateDetection';
 import SmartCollections from './components/SmartCollections';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import type { Post, FilterState, SortOption, ViewMode } from './types';
-import { apiFetch, UnauthorizedError, hasApiSecret, setApiSecret } from './utils/api';
+import { apiFetch, UnauthorizedError, hasApiSecret, setApiSecret, setCurrentAccount } from './utils/api';
+import { API_URL } from './config';
 import './App.css';
 
 function App() {
@@ -25,6 +26,8 @@ function App() {
   });
   const [showCategorizationModal, setShowCategorizationModal] = useState(false);
   const [showDuplicateDetection, setShowDuplicateDetection] = useState(false);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  const [selectedAccount, setSelectedAccount] = useLocalStorage<string>('selectedAccount', '');
 
   // Dark mode state with localStorage persistence
   const [isDarkMode, setIsDarkMode] = useLocalStorage('theme', false);
@@ -34,12 +37,39 @@ function App() {
     document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
 
+  // Fetch accounts on auth, then load data for the selected one
   useEffect(() => {
     if (isAuthenticated) {
+      fetchAccounts();
+    }
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (isAuthenticated && selectedAccount) {
+      setCurrentAccount(selectedAccount);
       fetchPosts();
       fetchCategories();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, selectedAccount]);
+
+  const fetchAccounts = async () => {
+    try {
+      const secret = localStorage.getItem('api-secret') || '';
+      const res = await fetch(`${API_URL}/api/accounts`, {
+        headers: secret ? { Authorization: `Bearer ${secret}` } : {},
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAccounts(data);
+        // Auto-select first account if none selected or current selection invalid
+        if (data.length > 0 && (!selectedAccount || !data.includes(selectedAccount))) {
+          setSelectedAccount(data[0]);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch accounts:', err);
+    }
+  };
 
   const fetchPosts = async () => {
     try {
@@ -200,9 +230,22 @@ function App() {
         <div>
           <h1>Instagram Saved Posts</h1>
           <p className="subtitle">
+            {selectedAccount && `@${selectedAccount} · `}
             {filteredAndSortedPosts.length} of {posts.length} posts
           </p>
         </div>
+
+        {accounts.length > 1 && (
+          <select
+            className="account-switcher"
+            value={selectedAccount}
+            onChange={(e) => setSelectedAccount(e.target.value)}
+          >
+            {accounts.map((acct) => (
+              <option key={acct} value={acct}>@{acct}</option>
+            ))}
+          </select>
+        )}
 
         <div className="header-buttons">
           {uncategorizedCount > 0 && (

@@ -4,12 +4,21 @@ interface Env {
   R2_PUBLIC_URL: string;
 }
 
+function getAccount(request: Request): string | null {
+  return new URL(request.url).searchParams.get("account");
+}
+
 export const onRequestGet: PagesFunction<Env> = async (context) => {
+  const account = getAccount(context.request);
+  if (!account) {
+    return Response.json({ error: "account parameter is required" }, { status: 400, headers: corsHeaders() });
+  }
+
   const bucket = context.env.R2_BUCKET;
 
   const [indexObj, metaObj] = await Promise.all([
-    bucket.get("posts-index.json"),
-    bucket.get("metadata.json"),
+    bucket.get(`${account}/posts-index.json`),
+    bucket.get(`${account}/metadata.json`),
   ]);
 
   if (!indexObj) {
@@ -31,13 +40,12 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
       ...post,
       categories: postMeta.categories || [],
       notes: postMeta.notes || "",
-      // Prefix media URLs with R2 public base
-      displayUrl: post.displayUrl ? `${mediaBase}/${post.displayUrl}` : "",
-      videoUrl: post.videoUrl ? `${mediaBase}/${post.videoUrl}` : "",
+      displayUrl: post.displayUrl ? `${mediaBase}/${account}/${post.displayUrl}` : "",
+      videoUrl: post.videoUrl ? `${mediaBase}/${account}/${post.videoUrl}` : "",
       carouselItems: (post.carouselItems || []).map((item: any) => ({
         ...item,
-        displayUrl: item.displayUrl ? `${mediaBase}/${item.displayUrl}` : "",
-        videoUrl: item.videoUrl ? `${mediaBase}/${item.videoUrl}` : "",
+        displayUrl: item.displayUrl ? `${mediaBase}/${account}/${item.displayUrl}` : "",
+        videoUrl: item.videoUrl ? `${mediaBase}/${account}/${item.videoUrl}` : "",
       })),
     };
   });
