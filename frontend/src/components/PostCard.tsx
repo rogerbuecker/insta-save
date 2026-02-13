@@ -3,7 +3,7 @@ import type { Post } from '../types';
 import PostDetailModal from './PostDetailModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import AddCategoryModal from './AddCategoryModal';
-import { API_URL } from '../config';
+import { apiFetch } from '../utils/api';
 import { getMediaUrl, formatDate } from '../utils/media';
 import './PostCard.css';
 
@@ -41,11 +41,8 @@ const PostCard: React.FC<PostCardProps> = ({ post, viewMode, availableCategories
 
   const handleSave = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/posts/${post.id}/metadata`, {
+      const response = await apiFetch(`/api/posts/${post.id}/metadata`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           categories: selectedCategories,
           notes: editingNotes,
@@ -96,7 +93,7 @@ const PostCard: React.FC<PostCardProps> = ({ post, viewMode, availableCategories
 
   const handleDeleteConfirm = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/posts/${post.id}`, {
+      const response = await apiFetch(`/api/posts/${post.id}`, {
         method: 'DELETE',
       });
 

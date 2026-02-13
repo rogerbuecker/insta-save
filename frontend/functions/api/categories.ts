@@ -47,7 +47,7 @@ function corsHeaders(preflight = false): HeadersInit {
   };
   if (preflight) {
     headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-    headers["Access-Control-Allow-Headers"] = "Content-Type";
+    headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
   }
   return headers;
 }

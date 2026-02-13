@@ -6,7 +6,7 @@ import DuplicateDetection from './components/DuplicateDetection';
 import SmartCollections from './components/SmartCollections';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import type { Post, FilterState, SortOption, ViewMode } from './types';
-import { API_URL } from './config';
+import { apiFetch, UnauthorizedError, hasApiSecret, setApiSecret } from './utils/api';
 import './App.css';
 
 function App() {
@@ -14,6 +14,7 @@ function App() {
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(hasApiSecret());
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [sortOption, setSortOption] = useState<SortOption>('date-desc');
   const [filters, setFilters] = useState<FilterState>({
@@ -34,21 +35,22 @@ function App() {
   }, [isDarkMode]);
 
   useEffect(() => {
-    fetchPosts();
-    fetchCategories();
-  }, []);
+    if (isAuthenticated) {
+      fetchPosts();
+      fetchCategories();
+    }
+  }, [isAuthenticated]);
 
   const fetchPosts = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${API_URL}/api/posts`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch posts');
-      }
+      const response = await apiFetch('/api/posts');
+      if (!response.ok) throw new Error('Failed to fetch posts');
       const data = await response.json();
       setPosts(data);
       setError(null);
     } catch (err) {
+      if (err instanceof UnauthorizedError) { setIsAuthenticated(false); return; }
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setLoading(false);
@@ -57,14 +59,20 @@ function App() {
 
   const fetchCategories = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/categories`);
+      const response = await apiFetch('/api/categories');
       if (response.ok) {
         const data = await response.json();
         setCategories(data);
       }
     } catch (err) {
+      if (err instanceof UnauthorizedError) { setIsAuthenticated(false); return; }
       console.error('Failed to fetch categories:', err);
     }
+  };
+
+  const handleLogin = (secret: string) => {
+    setApiSecret(secret);
+    setIsAuthenticated(true);
   };
 
   const handlePostUpdate = (postId: string, updates: Partial<Post>) => {
@@ -136,6 +144,25 @@ function App() {
   const uncategorizedCount = useMemo(() => {
     return posts.filter(post => post.categories.length === 0).length;
   }, [posts]);
+
+  if (!isAuthenticated) {
+    return (
+      <div className="app">
+        <div className="auth-gate">
+          <h2>Instagram Saved Posts</h2>
+          <p>Enter the API secret to continue.</p>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            const input = (e.target as HTMLFormElement).elements.namedItem('secret') as HTMLInputElement;
+            if (input.value.trim()) handleLogin(input.value.trim());
+          }}>
+            <input name="secret" type="password" placeholder="API Secret" autoFocus />
+            <button type="submit">Enter</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

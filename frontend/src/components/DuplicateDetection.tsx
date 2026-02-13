@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { Post, DuplicateMatch } from '../types';
-import { API_URL } from '../config';
+import { apiFetch } from '../utils/api';
 import { getMediaUrl } from '../utils/media';
 import './DuplicateDetection.css';
 
@@ -28,7 +28,7 @@ const DuplicateDetection: React.FC<DuplicateDetectionProps> = ({
   const fetchDuplicates = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${API_URL}/api/duplicates`);
+      const response = await apiFetch('/api/duplicates');
       if (response.ok) {
         const data = await response.json();
         setDuplicates(data);
@@ -47,7 +47,7 @@ const DuplicateDetection: React.FC<DuplicateDetectionProps> = ({
 
     try {
       setProcessing(true);
-      const response = await fetch(`${API_URL}/api/duplicates/auto-clean`, {
+      const response = await apiFetch('/api/duplicates/auto-clean', {
         method: 'POST',
       });
 
@@ -66,11 +66,8 @@ const DuplicateDetection: React.FC<DuplicateDetectionProps> = ({
   const handleMerge = async (keepId: string, deleteId: string) => {
     try {
       setProcessing(true);
-      const response = await fetch(`${API_URL}/api/duplicates/merge`, {
+      const response = await apiFetch('/api/duplicates/merge', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ keepId, deleteId }),
       });
 
@@ -78,7 +75,7 @@ const DuplicateDetection: React.FC<DuplicateDetectionProps> = ({
         const result = await response.json();
         if (result.success) {
           // Fetch the updated post data
-          const postResponse = await fetch(`${API_URL}/api/posts/${keepId}`);
+          const postResponse = await apiFetch(`/api/posts/${keepId}`);
           if (postResponse.ok) {
             const updatedPost = await postResponse.json();
             onPostUpdate(keepId, updatedPost);
@@ -101,7 +98,7 @@ const DuplicateDetection: React.FC<DuplicateDetectionProps> = ({
 
     try {
       setProcessing(true);
-      const response = await fetch(`${API_URL}/api/posts/${postId}`, {
+      const response = await apiFetch(`/api/posts/${postId}`, {
         method: 'DELETE',
       });
 

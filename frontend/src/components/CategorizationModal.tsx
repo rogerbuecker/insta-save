@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { Post, CategorySuggestion } from '../types';
 import AddCategoryModal from './AddCategoryModal';
-import { API_URL } from '../config';
+import { apiFetch } from '../utils/api';
 import { getMediaUrl } from '../utils/media';
 import './CategorizationModal.css';
 
@@ -48,7 +48,7 @@ const CategorizationModal: React.FC<CategorizationModalProps> = ({
   const fetchSuggestions = async (postId: string) => {
     try {
       setLoadingSuggestions(true);
-      const response = await fetch(`${API_URL}/api/posts/${postId}/suggest-categories`);
+      const response = await apiFetch(`/api/posts/${postId}/suggest-categories`);
       if (response.ok) {
         const data = await response.json();
         setSuggestions(data);
@@ -73,11 +73,8 @@ const CategorizationModal: React.FC<CategorizationModalProps> = ({
     if (!currentPost) return;
 
     try {
-      const response = await fetch(`${API_URL}/api/posts/${currentPost.id}/metadata`, {
+      const response = await apiFetch(`/api/posts/${currentPost.id}/metadata`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           categories: selectedCategories,
           notes: notes,
