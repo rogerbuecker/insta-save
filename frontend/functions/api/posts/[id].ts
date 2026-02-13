@@ -1,7 +1,8 @@
-// PUT /api/posts/:id — update metadata (categories/notes)
+// GET /api/posts/:id — return a single post from the index
 // DELETE /api/posts/:id — delete post from R2
 interface Env {
   R2_BUCKET: R2Bucket;
+  R2_PUBLIC_URL: string;
 }
 
 async function readMetadata(bucket: R2Bucket) {
@@ -16,24 +17,39 @@ async function writeMetadata(bucket: R2Bucket, metadata: any) {
   });
 }
 
-export const onRequestPut: PagesFunction<Env> = async (context) => {
+export const onRequestGet: PagesFunction<Env> = async (context) => {
   const id = context.params.id as string;
-  const { categories, notes } = await context.request.json<{ categories?: string[]; notes?: string }>();
+  const bucket = context.env.R2_BUCKET;
 
-  const metadata = await readMetadata(context.env.R2_BUCKET);
-
-  if (!metadata.posts[id]) {
-    metadata.posts[id] = {};
-  }
-  if (categories !== undefined) {
-    metadata.posts[id].categories = Array.isArray(categories) ? categories : [];
-  }
-  if (notes !== undefined) {
-    metadata.posts[id].notes = notes;
+  const indexObj = await bucket.get("posts-index.json");
+  if (!indexObj) {
+    return Response.json({ error: "Post not found" }, { status: 404, headers: corsHeaders() });
   }
 
-  await writeMetadata(context.env.R2_BUCKET, metadata);
-  return Response.json({ success: true, metadata: metadata.posts[id] }, { headers: corsHeaders() });
+  const posts = await indexObj.json<any[]>();
+  const post = posts.find((p: any) => p.id === id);
+  if (!post) {
+    return Response.json({ error: "Post not found" }, { status: 404, headers: corsHeaders() });
+  }
+
+  const metadata = await readMetadata(bucket);
+  const postMeta = metadata.posts[id] || { categories: [], notes: "" };
+  const mediaBase = context.env.R2_PUBLIC_URL || "";
+
+  const merged = {
+    ...post,
+    categories: postMeta.categories || [],
+    notes: postMeta.notes || "",
+    displayUrl: post.displayUrl ? `${mediaBase}/${post.displayUrl}` : "",
+    videoUrl: post.videoUrl ? `${mediaBase}/${post.videoUrl}` : "",
+    carouselItems: (post.carouselItems || []).map((item: any) => ({
+      ...item,
+      displayUrl: item.displayUrl ? `${mediaBase}/${item.displayUrl}` : "",
+      videoUrl: item.videoUrl ? `${mediaBase}/${item.videoUrl}` : "",
+    })),
+  };
+
+  return Response.json(merged, { headers: corsHeaders() });
 };
 
 export const onRequestDelete: PagesFunction<Env> = async (context) => {
@@ -41,13 +57,10 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
   const bucket = context.env.R2_BUCKET;
 
   // Delete all files associated with this post
-  const extensions = [".json", ".jpg", ".mp4"];
   const keysToDelete: string[] = [];
-
-  for (const ext of extensions) {
+  for (const ext of [".json", ".jpg", ".mp4"]) {
     keysToDelete.push(`${id}${ext}`);
   }
-
   // Carousel items (up to 20)
   for (let i = 1; i <= 20; i++) {
     keysToDelete.push(`${id}_${i}.jpg`);
@@ -64,7 +77,7 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
     await writeMetadata(bucket, metadata);
   }
 
-  // Rebuild the index after deletion
+  // Remove from index
   const indexObj = await bucket.get("posts-index.json");
   if (indexObj) {
     const posts = await indexObj.json<any[]>();
@@ -82,7 +95,7 @@ export const onRequestOptions: PagesFunction = async () => {
     status: 204,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     },
   });

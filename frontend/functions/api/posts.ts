@@ -1,6 +1,7 @@
 // GET /api/posts — returns posts-index.json from R2, merged with metadata
 interface Env {
   R2_BUCKET: R2Bucket;
+  R2_PUBLIC_URL: string;
 }
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
