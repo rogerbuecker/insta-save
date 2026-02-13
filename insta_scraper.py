@@ -7,6 +7,9 @@ Scrapes saved posts from your Instagram account
 import instaloader
 import json
 import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
 from datetime import datetime
 import sys
@@ -45,7 +48,7 @@ class InstagramSavedPostsScraper:
 
         for json_file in output_path.glob("*.json"):
             # Skip non-post files
-            if json_file.name in ("metadata.json", "saved_posts_summary.json"):
+            if json_file.name in ("metadata.json", "posts-index.json"):
                 continue
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
@@ -58,17 +61,148 @@ class InstagramSavedPostsScraper:
 
         return existing
 
-    def _load_existing_summary(self, output_dir):
-        """Load existing summary data so new posts can be merged in."""
-        summary_file = os.path.join(output_dir, "saved_posts_summary.json")
-        if os.path.exists(summary_file):
+    def sync_to_cloud(self, output_dir="saved_posts"):
+        """Push local saved_posts to cloud storage using rclone."""
+        remote = os.environ.get('RCLONE_REMOTE', '')
+        if not remote:
+            return
+
+        if not shutil.which('rclone'):
+            print("\nWarning: RCLONE_REMOTE is set but rclone is not installed, skipping cloud sync")
+            return
+
+        print(f"\nSyncing to {remote}...")
+        result = subprocess.run(
+            ['rclone', 'sync', output_dir, remote, '--progress', '--transfers', '8'],
+        )
+        if result.returncode == 0:
+            print("✓ Cloud sync complete")
+        else:
+            print("✗ Cloud sync failed")
+
+    def sync_from_cloud(self, output_dir="saved_posts"):
+        """Pull from cloud storage to local saved_posts using rclone."""
+        remote = os.environ.get('RCLONE_REMOTE', '')
+        if not remote:
+            print("Error: RCLONE_REMOTE environment variable not set")
+            print("  Set it to your rclone remote path, e.g.: export RCLONE_REMOTE=r2:insta-save")
+            return False
+
+        if not shutil.which('rclone'):
+            print("Error: rclone is not installed")
+            return False
+
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        print(f"Pulling from {remote} to {output_dir}/...")
+        result = subprocess.run(
+            ['rclone', 'sync', remote, output_dir, '--progress', '--transfers', '8'],
+        )
+        if result.returncode == 0:
+            print("✓ Pull complete")
+            return True
+        else:
+            print("✗ Pull failed")
+            return False
+
+    def build_index(self, output_dir="saved_posts"):
+        """
+        Build posts-index.json from all post JSON files in the output directory.
+        Pre-computes everything the frontend needs so the hosted app loads instantly.
+        """
+        output_path = Path(output_dir)
+        if not output_path.exists():
+            return
+
+        hashtag_re = re.compile(r'#[\w\u00C0-\u024F\u1E00-\u1EFF]+')
+        posts = []
+
+        for json_file in sorted(output_path.glob("*.json")):
+            if json_file.name in ("metadata.json", "posts-index.json"):
+                continue
+
             try:
-                with open(summary_file, 'r', encoding='utf-8') as f:
+                with open(json_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                return {p['shortcode']: p for p in data.get('posts', [])}
             except (json.JSONDecodeError, KeyError):
-                pass
-        return {}
+                continue
+
+            node = data.get("node", {})
+            if not node:
+                continue
+
+            base_id = json_file.stem  # e.g. "2024-01-01_07-51-26_UTC"
+            caption = ""
+            caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
+            if caption_edges:
+                caption = caption_edges[0].get("node", {}).get("text", "")
+
+            hashtags = [t.lower() for t in hashtag_re.findall(caption)]
+            is_video = node.get("__typename") == "GraphVideo"
+            is_carousel = node.get("__typename") == "GraphSidecar"
+
+            # Check which media files exist locally
+            has_jpg = (output_path / f"{base_id}.jpg").exists()
+            has_mp4 = (output_path / f"{base_id}.mp4").exists()
+
+            # Carousel items
+            carousel_items = []
+            if is_carousel:
+                edges = node.get("edge_sidecar_to_children", {}).get("edges", [])
+                for idx, edge in enumerate(edges):
+                    item = edge.get("node", {})
+                    item_id = f"{base_id}_{idx + 1}"
+                    item_is_video = item.get("__typename") == "GraphVideo"
+                    carousel_items.append({
+                        "id": item_id,
+                        "displayUrl": f"{item_id}.jpg" if (output_path / f"{item_id}.jpg").exists() else "",
+                        "isVideo": item_is_video,
+                        "videoUrl": f"{item_id}.mp4" if (output_path / f"{item_id}.mp4").exists() else "",
+                        "altText": item.get("accessibility_caption", ""),
+                        "dimensions": item.get("dimensions", {"width": 0, "height": 0}),
+                    })
+
+            # Tagged users
+            tagged_users = []
+            for edge in node.get("edge_media_to_tagged_user", {}).get("edges", []):
+                user = edge.get("node", {}).get("user", {})
+                tagged_users.append({
+                    "username": user.get("username", ""),
+                    "fullName": user.get("full_name", ""),
+                })
+
+            posts.append({
+                "id": base_id,
+                "filename": json_file.name,
+                "timestamp": base_id,
+                "caption": caption,
+                "postUrl": f"https://www.instagram.com/p/{node.get('shortcode', '')}/",
+                "displayUrl": f"{base_id}.jpg" if has_jpg else "",
+                "isVideo": is_video,
+                "videoUrl": f"{base_id}.mp4" if has_mp4 else "",
+                "owner": node.get("owner", {}).get("username", "unknown"),
+                "location": (node.get("location") or {}).get("name"),
+                "hashtags": hashtags,
+                "isCarousel": is_carousel,
+                "carouselItems": carousel_items,
+                "altText": node.get("accessibility_caption", ""),
+                "taggedUsers": tagged_users,
+                "engagement": {
+                    "likes": node.get("edge_liked_by", {}).get("count", 0),
+                    "comments": node.get("edge_media_to_comment", {}).get("count", 0),
+                },
+                "locationDetails": {
+                    "id": node["location"]["id"],
+                    "name": node["location"]["name"],
+                    "slug": node["location"].get("slug"),
+                } if node.get("location") else None,
+            })
+
+        index_file = output_path / "posts-index.json"
+        with open(index_file, 'w', encoding='utf-8') as f:
+            json.dump(posts, f, ensure_ascii=False)
+
+        print(f"✓ Built posts-index.json ({len(posts)} posts)")
 
     def login(self, username=None, password=None):
         """
@@ -153,7 +287,6 @@ class InstagramSavedPostsScraper:
 
             # Load index of already-downloaded posts
             existing_shortcodes = self._load_existing_shortcodes(output_dir)
-            existing_summary = self._load_existing_summary(output_dir)
 
             if existing_shortcodes:
                 print(f"\nFound {len(existing_shortcodes)} previously downloaded posts")
@@ -230,26 +363,12 @@ class InstagramSavedPostsScraper:
                     print(f"    ✗ Error downloading post: {str(e)}\n")
                     continue
 
-            # Merge new posts into existing summary
-            for p in new_posts:
-                existing_summary[p['shortcode']] = p
-
-            summary_file = os.path.join(output_dir, "saved_posts_summary.json")
-            with open(summary_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'username': self.username,
-                    'download_date': datetime.now().isoformat(),
-                    'total_posts': len(existing_summary),
-                    'posts': list(existing_summary.values())
-                }, f, indent=2, ensure_ascii=False)
-
             print(f"\n{'='*50}")
             if is_incremental:
                 print(f"✓ Sync complete!")
                 print(f"  New posts downloaded: {len(new_posts)}")
                 print(f"  Already had: {skipped}")
                 print(f"  Posts checked: {checked}")
-                print(f"  Total posts in library: {len(existing_summary)}")
             else:
                 print(f"✓ Download complete!")
                 print(f"  Total posts downloaded: {len(new_posts)}")
@@ -271,11 +390,22 @@ def main():
                         help="Check all saved posts instead of stopping early at known posts")
     parser.add_argument("--limit", type=int, default=None,
                         help="Maximum number of new posts to download")
+    parser.add_argument("--pull", action="store_true",
+                        help="Pull from cloud storage to local (no crawl)")
+    parser.add_argument("--no-sync", action="store_true",
+                        help="Skip cloud sync after crawling")
     args = parser.parse_args()
 
     print("="*50)
     print("Instagram Saved Posts Scraper")
     print("="*50 + "\n")
+
+    scraper = InstagramSavedPostsScraper()
+
+    # Pull mode: download from cloud and exit
+    if args.pull:
+        scraper.sync_from_cloud()
+        return
 
     # Check for existing session files
     session_files = [f for f in os.listdir('.') if f.startswith('.session-')]
@@ -302,6 +432,9 @@ def main():
                         limit = args.limit
 
                     scraper.get_saved_posts(limit=limit, full_resync=args.full_resync)
+                    scraper.build_index()
+                    if not args.no_sync:
+                        scraper.sync_to_cloud()
                 return
 
     # New login
@@ -321,6 +454,9 @@ def main():
             limit = args.limit
 
         scraper.get_saved_posts(limit=limit, full_resync=args.full_resync)
+        scraper.build_index()
+        if not args.no_sync:
+            scraper.sync_to_cloud()
 
 
 if __name__ == "__main__":

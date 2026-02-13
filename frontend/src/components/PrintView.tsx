@@ -1,8 +1,7 @@
 import React, { useEffect } from 'react';
 import type { Post } from '../types';
+import { getMediaUrl } from '../utils/media';
 import './PrintView.css';
-
-const API_URL = 'http://localhost:3001';
 
 interface PrintViewProps {
   post: Post;
@@ -18,12 +17,6 @@ const PrintView: React.FC<PrintViewProps> = ({ post, onClose }) => {
 
     return () => clearTimeout(timer);
   }, []);
-
-  const getMediaUrl = (url: string) => {
-    if (!url) return '';
-    if (url.startsWith('http')) return url;
-    return `${API_URL}${url}`;
-  };
 
   const displayUrl = getMediaUrl(post.displayUrl);
 

@@ -3,9 +3,9 @@ import type { Post } from '../types';
 import PostDetailModal from './PostDetailModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import AddCategoryModal from './AddCategoryModal';
+import { API_URL } from '../config';
+import { getMediaUrl, formatDate } from '../utils/media';
 import './PostCard.css';
-
-const API_URL = 'http://localhost:3001';
 
 interface PostCardProps {
   post: Post;
@@ -23,24 +23,9 @@ const PostCard: React.FC<PostCardProps> = ({ post, viewMode, availableCategories
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showAddCategory, setShowAddCategory] = useState(false);
-  const formatDate = (timestamp: string) => {
-    const parts = timestamp.split('_');
-    if (parts.length >= 2) {
-      return parts[0] + ' ' + parts[1];
-    }
-    return timestamp;
-  };
-
   const truncateText = (text: string, maxLength: number) => {
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength) + '...';
-  };
-
-  // Convert relative URLs to absolute URLs pointing to API server
-  const getMediaUrl = (url: string) => {
-    if (!url) return undefined;
-    if (url.startsWith('http')) return url;
-    return `${API_URL}${url}`;
   };
 
   const displayUrl = getMediaUrl(post.displayUrl);

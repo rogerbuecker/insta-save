@@ -6,9 +6,8 @@ import DuplicateDetection from './components/DuplicateDetection';
 import SmartCollections from './components/SmartCollections';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import type { Post, FilterState, SortOption, ViewMode } from './types';
+import { API_URL } from './config';
 import './App.css';
-
-const API_URL = 'http://localhost:3001';
 
 function App() {
   const [posts, setPosts] = useState<Post[]>([]);
@@ -216,7 +215,11 @@ function App() {
       <div className={`posts-container ${viewMode}`}>
         {filteredAndSortedPosts.length === 0 ? (
           <div className="no-results">
-            <p>No posts found matching your filters.</p>
+            {posts.length === 0 ? (
+              <p>No posts yet. Run the scraper to download your saved Instagram posts.</p>
+            ) : (
+              <p>No posts found matching your filters.</p>
+            )}
           </div>
         ) : (
           filteredAndSortedPosts.map(post => (

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import type { Post, CategorySuggestion } from '../types';
 import AddCategoryModal from './AddCategoryModal';
+import { API_URL } from '../config';
+import { getMediaUrl } from '../utils/media';
 import './CategorizationModal.css';
-
-const API_URL = 'http://localhost:3001';
 
 interface CategorizationModalProps {
   posts: Post[];
@@ -59,12 +59,6 @@ const CategorizationModal: React.FC<CategorizationModalProps> = ({
     } finally {
       setLoadingSuggestions(false);
     }
-  };
-
-  const getMediaUrl = (url: string) => {
-    if (!url) return '';
-    if (url.startsWith('http')) return url;
-    return `${API_URL}${url}`;
   };
 
   const handleCategoryToggle = (category: string) => {

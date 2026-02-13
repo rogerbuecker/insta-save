@@ -2,9 +2,8 @@ import React, { useEffect, useState } from 'react';
 import type { Post } from '../types';
 import CarouselViewer from './CarouselViewer';
 import PrintView from './PrintView';
+import { getMediaUrl, formatDate } from '../utils/media';
 import './PostDetailModal.css';
-
-const API_URL = 'http://localhost:3001';
 
 interface PostDetailModalProps {
   post: Post;
@@ -15,21 +14,6 @@ interface PostDetailModalProps {
 
 const PostDetailModal: React.FC<PostDetailModalProps> = ({ post, onClose, onEdit, onDelete }) => {
   const [showPrintView, setShowPrintView] = useState(false);
-  const getMediaUrl = (url: string) => {
-    if (!url) return '';
-    if (url.startsWith('http')) return url;
-    return `${API_URL}${url}`;
-  };
-
-  const formatDate = (timestamp: string) => {
-    const parts = timestamp.split('_');
-    if (parts.length >= 2) {
-      const date = parts[0];
-      const time = parts[1];
-      return `${date} at ${time}`;
-    }
-    return timestamp;
-  };
 
   const displayUrl = getMediaUrl(post.displayUrl);
   const videoUrl = getMediaUrl(post.videoUrl);

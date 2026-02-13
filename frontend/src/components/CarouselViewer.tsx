@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { CarouselItem } from '../types';
+import { getMediaUrl } from '../utils/media';
 import './CarouselViewer.css';
-
-const API_URL = 'http://localhost:3001';
 
 interface CarouselViewerProps {
   items: CarouselItem[];
@@ -11,12 +10,6 @@ interface CarouselViewerProps {
 
 const CarouselViewer: React.FC<CarouselViewerProps> = ({ items, initialIndex = 0 }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
-
-  const getMediaUrl = (url: string) => {
-    if (!url) return '';
-    if (url.startsWith('http')) return url;
-    return `${API_URL}${url}`;
-  };
 
   const goToNext = () => {
     setCurrentIndex((prev) => (prev + 1) % items.length);

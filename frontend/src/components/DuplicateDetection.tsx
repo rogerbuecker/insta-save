@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import type { Post, DuplicateMatch } from '../types';
+import { API_URL } from '../config';
+import { getMediaUrl } from '../utils/media';
 import './DuplicateDetection.css';
-
-const API_URL = 'http://localhost:3001';
 
 interface DuplicateDetectionProps {
   posts: Post[];
@@ -125,12 +125,6 @@ const DuplicateDetection: React.FC<DuplicateDetectionProps> = ({
 
   const getPostById = (id: string): Post | undefined => {
     return posts.find(p => p.id === id);
-  };
-
-  const getMediaUrl = (url: string) => {
-    if (!url) return '';
-    if (url.startsWith('http')) return url;
-    return `${API_URL}${url}`;
   };
 
   const exactDuplicates = duplicates.filter(d => d.matchType === 'exact');
