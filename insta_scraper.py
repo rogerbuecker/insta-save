@@ -31,10 +31,35 @@ class InstagramSavedPostsScraper:
             download_comments=False,
             save_metadata=True,
             compress_json=False,
-            post_metadata_txt_pattern=''
+            post_metadata_txt_pattern='',
         )
         self.username = username
         self.session_file = session_file
+
+    def _get_user_id(self):
+        """Extract ds_user_id from session cookies or session file."""
+        # Try cookie jar (iterate to avoid "multiple cookies" error)
+        for cookie in self.loader.context._session.cookies:
+            if cookie.name == 'ds_user_id':
+                return cookie.value
+        # Try get_dict() which merges by name
+        try:
+            cookie_dict = self.loader.context._session.cookies.get_dict()
+            if 'ds_user_id' in cookie_dict:
+                return str(cookie_dict['ds_user_id'])
+        except Exception:
+            pass
+        # Fallback: read directly from session file (old-style dict sessions)
+        if self.session_file and os.path.exists(self.session_file):
+            try:
+                import pickle
+                with open(self.session_file, 'rb') as f:
+                    data = pickle.load(f)
+                if isinstance(data, dict) and 'ds_user_id' in data:
+                    return str(data['ds_user_id'])
+            except Exception:
+                pass
+        return None
 
     def _load_existing_shortcodes(self, output_dir):
         """
@@ -305,15 +330,29 @@ class InstagramSavedPostsScraper:
                 print("\nNo previous downloads found — performing full download")
 
             print(f"Fetching saved posts for {self.username}...")
-            # Get user ID from session cookies to avoid the heavily
-            # rate-limited web_profile_info endpoint (from_username).
-            user_id = self.loader.context._session.cookies.get('ds_user_id')
+            # Get user ID from session cookies to avoid any API calls for profile lookup.
+            user_id = self._get_user_id()
             if user_id:
-                profile = instaloader.Profile.from_id(self.loader.context, int(user_id))
+                print(f"  Using user ID {user_id} from session (no API call needed)")
+                # Build saved posts iterator directly — avoids rate-limited profile endpoints
+                saved_posts = instaloader.NodeIterator(
+                    self.loader.context,
+                    'f883d95537fbcd400f466f63d42bd8a1',
+                    lambda d: d['data']['user']['edge_saved_media'],
+                    lambda n: instaloader.Post(self.loader.context, n),
+                    {'id': user_id},
+                    f'https://www.instagram.com/{self.username}/',
+                )
             else:
-                profile = instaloader.Profile.from_username(self.loader.context, self.username)
-
-            saved_posts = profile.get_saved_posts()
+                try:
+                    print(f"  Looking up profile for {self.username} (may be rate-limited)")
+                    profile = instaloader.Profile.from_username(self.loader.context, self.username)
+                    saved_posts = profile.get_saved_posts()
+                except KeyError as e:
+                    print(f"\n✗ Session appears to be invalid (unexpected response: {e})")
+                    print(f"  Delete the session file and re-login:")
+                    print(f"  rm .session-{self.username}")
+                    return
 
             new_posts = []
             skipped = 0
@@ -352,7 +391,7 @@ class InstagramSavedPostsScraper:
                 print(f"    URL: https://www.instagram.com/p/{post.shortcode}/")
 
                 try:
-                    self.loader.download_post(post, target=output_dir)
+                    self.loader.download_post(post, target=Path(output_dir))
 
                     post_info = {
                         'shortcode': post.shortcode,

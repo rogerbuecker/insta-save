@@ -1,9 +1,6 @@
 name = "insta-save"
 compatibility_date = "2024-12-01"
-
-# Cloudflare Pages will auto-detect the build output in dist/
-# Build command: npm run build
-# Output directory: dist
+pages_build_output_dir = "dist"
 
 # R2 bucket binding — set your bucket name here after creating it
 # in the Cloudflare dashboard: Workers & Pages > R2
