@@ -1,292 +1,133 @@
-import React, { useState, useEffect } from 'react';
-import type { Post, CategorySuggestion } from '../types';
-import AddCategoryModal from './AddCategoryModal';
-import { apiFetch } from '../utils/api';
-import { getMediaUrl } from '../utils/media';
+import { useState } from 'react';
+import type { Post } from '../types';
+import { useOverlay } from '../hooks/useOverlay';
+import { postImageUrl } from '../utils/media';
 import './CategorizationModal.css';
 
 interface CategorizationModalProps {
   posts: Post[];
   availableCategories: string[];
   onClose: () => void;
-  onPostUpdate: (postId: string, updates: Partial<Post>) => void;
-  onCategoryAdd: (category: string) => void;
+  onSave: (post: Post, categories: string[], notes: string) => void;
+  onCreateCategory: (name: string) => Promise<boolean>;
 }
 
-const CategorizationModal: React.FC<CategorizationModalProps> = ({
-  posts,
-  availableCategories,
-  onClose,
-  onPostUpdate,
-  onCategoryAdd,
-}) => {
-  const uncategorizedPosts = posts.filter(post => post.categories.length === 0);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+/** Walk through all posts without category one by one (categories + note). */
+const CategorizationModal = ({ posts, availableCategories, onClose, onSave, onCreateCategory }: CategorizationModalProps) => {
+  useOverlay(true, onClose);
+  // Snapshot: saved posts drop out of "uncategorised" but must keep their place in the walk
+  const [queue] = useState(() => posts.filter(p => p.categories.length === 0).map(p => p.id));
+  const [index, setIndex] = useState(0);
+  const [selected, setSelected] = useState<string[]>([]);
   const [notes, setNotes] = useState('');
-  const [isCompleted, setIsCompleted] = useState(false);
-  const [showAddCategory, setShowAddCategory] = useState(false);
-  const [suggestions, setSuggestions] = useState<CategorySuggestion[]>([]);
-  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [loadedId, setLoadedId] = useState<string | null>(null);
 
-  const currentPost = uncategorizedPosts[currentIndex];
+  const post = posts.find(p => p.id === queue[index]);
+  const done = index >= queue.length;
 
-  useEffect(() => {
-    if (currentPost) {
-      setSelectedCategories(currentPost.categories || []);
-      setNotes(currentPost.notes || '');
-      fetchSuggestions(currentPost.id);
-    }
-  }, [currentIndex, currentPost]);
-
-  useEffect(() => {
-    if (uncategorizedPosts.length === 0) {
-      setIsCompleted(true);
-    }
-  }, [uncategorizedPosts.length]);
-
-  const fetchSuggestions = async (postId: string) => {
-    try {
-      setLoadingSuggestions(true);
-      const response = await apiFetch(`/api/posts/${postId}/suggest-categories`);
-      if (response.ok) {
-        const data = await response.json();
-        setSuggestions(data);
-      }
-    } catch (error) {
-      console.error('Error fetching suggestions:', error);
-      setSuggestions([]);
-    } finally {
-      setLoadingSuggestions(false);
-    }
-  };
-
-  const handleCategoryToggle = (category: string) => {
-    setSelectedCategories(prev =>
-      prev.includes(category)
-        ? prev.filter(c => c !== category)
-        : [...prev, category]
-    );
-  };
-
-  const handleSave = async () => {
-    if (!currentPost) return;
-
-    try {
-      const response = await apiFetch(`/api/posts/${currentPost.id}/metadata`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          categories: selectedCategories,
-          notes: notes,
-        }),
-      });
-
-      if (response.ok) {
-        onPostUpdate(currentPost.id, {
-          categories: selectedCategories,
-          notes: notes,
-        });
-
-        // Move to next post or complete
-        if (currentIndex < uncategorizedPosts.length - 1) {
-          setCurrentIndex(currentIndex + 1);
-        } else {
-          setIsCompleted(true);
-        }
-      }
-    } catch (error) {
-      console.error('Error saving metadata:', error);
-    }
-  };
-
-  const handleSkip = () => {
-    if (currentIndex < uncategorizedPosts.length - 1) {
-      setCurrentIndex(currentIndex + 1);
-    } else {
-      setIsCompleted(true);
-    }
-  };
-
-  const handlePrevious = () => {
-    if (currentIndex > 0) {
-      setCurrentIndex(currentIndex - 1);
-    }
-  };
-
-  const handleAddCategory = (category: string) => {
-    onCategoryAdd(category);
-    setShowAddCategory(false);
-  };
-
-  if (isCompleted || uncategorizedPosts.length === 0) {
-    return (
-      <div className="categorization-modal-overlay" onClick={onClose}>
-        <div className="categorization-modal" onClick={(e) => e.stopPropagation()}>
-          <div className="modal-body">
-            <div className="completion-message">
-              <h2>✅ All Done!</h2>
-              <p>
-                {posts.filter(p => p.categories.length === 0).length === 0
-                  ? 'All posts have been categorized.'
-                  : 'You\'ve reviewed all uncategorized posts.'}
-              </p>
-              <button onClick={onClose} className="done-btn">
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+  // Load the current post's values when moving to it (state reset during render, no effect needed)
+  if (post && loadedId !== post.id) {
+    setLoadedId(post.id);
+    setSelected(post.categories.length ? post.categories : post.suggestion ? [post.suggestion.category] : []);
+    setNotes(post.notes);
   }
 
-  if (!currentPost) return null;
+  const toggle = (cat: string) => setSelected(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
 
-  const displayUrl = getMediaUrl(currentPost.displayUrl);
-  const videoUrl = getMediaUrl(currentPost.videoUrl);
+  const go = (dir: 1 | -1) => setIndex(i => Math.max(0, Math.min(queue.length, i + dir)));
+
+  const save = () => {
+    if (!post) return;
+    if (selected.length || notes !== post.notes) onSave(post, selected, notes);
+    go(1);
+  };
+
+  const create = async () => {
+    const name = newName.trim();
+    if (name.length < 2) return;
+    const existing = availableCategories.find(c => c.toLowerCase() === name.toLowerCase());
+    if (existing || await onCreateCategory(name)) {
+      const cat = existing ?? name;
+      setSelected(prev => prev.includes(cat) ? prev : [...prev, cat]);
+      setNewName('');
+    }
+  };
 
   return (
-    <div className="categorization-modal-overlay" onClick={onClose}>
-      <div className="categorization-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
+    <div className="categorize-overlay" onClick={onClose}>
+      <div className="categorize" role="dialog" aria-modal="true" aria-label="Kategorisieren" onClick={(e) => e.stopPropagation()}>
+        <header className="categorize-head">
           <div>
-            <h2>Categorize Posts</h2>
-            <div className="modal-progress">
-              Post {currentIndex + 1} of {uncategorizedPosts.length}
-            </div>
+            <h2>Kategorisieren</h2>
+            {!done && <div className="categorize-progress">{index + 1} von {queue.length}</div>}
           </div>
-          <button onClick={onClose} className="close-btn">
-            ×
-          </button>
-        </div>
+          <button className="icon-btn" onClick={onClose} aria-label="Schließen">✕</button>
+        </header>
 
-        <div className="modal-body">
-          <div className="categorization-content">
-            <div className="post-preview">
-              <div className="preview-media">
-                {currentPost.isVideo ? (
-                  <video
-                    src={videoUrl}
-                    poster={displayUrl}
-                    controls
-                    className="preview-video"
-                  />
-                ) : (
-                  <img src={displayUrl} alt={currentPost.caption} className="preview-image" />
-                )}
+        {done || !post ? (
+          <div className="categorize-done">
+            <h3>✅ Fertig!</h3>
+            <p>{queue.length === 0 ? 'Alle Beiträge haben eine Kategorie.' : 'Du hast alle Beiträge ohne Kategorie durchgesehen.'}</p>
+            <button className="btn btn-primary" onClick={onClose}>Schließen</button>
+          </div>
+        ) : (
+          <>
+            <div className="categorize-body">
+              <div className="categorize-media">
+                {postImageUrl(post) && <img src={postImageUrl(post)} alt="" decoding="async" />}
+                {post.isVideo && <span className="categorize-video">▶ Video</span>}
               </div>
+              <div className="categorize-form">
+                <div className="categorize-owner">@{post.owner}</div>
+                {post.caption && <p className="categorize-caption">{post.caption}</p>}
 
-              <div className="preview-details">
-                <div className="preview-owner">@{currentPost.owner}</div>
-
-                {currentPost.caption && (
-                  <div className="preview-caption">{currentPost.caption}</div>
-                )}
-
-                {currentPost.hashtags.length > 0 && (
-                  <div className="preview-hashtags">
-                    {currentPost.hashtags.slice(0, 8).map((tag, idx) => (
-                      <span key={idx} className="preview-hashtag">{tag}</span>
-                    ))}
-                    {currentPost.hashtags.length > 8 && (
-                      <span className="preview-hashtag">+{currentPost.hashtags.length - 8} more</span>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="category-selection">
-              <h3>Select Categories</h3>
-
-              {/* AI Suggestions */}
-              {!loadingSuggestions && suggestions.length > 0 && (
-                <div className="ai-suggestions">
-                  <div className="suggestions-header">
-                    <span className="suggestions-title">✨ Suggested:</span>
-                  </div>
-                  <div className="suggestions-list">
-                    {suggestions.map((suggestion) => (
-                      <button
-                        key={suggestion.category}
-                        onClick={() => {
-                          if (!selectedCategories.includes(suggestion.category)) {
-                            handleCategoryToggle(suggestion.category);
-                          }
-                        }}
-                        className={`suggestion-chip ${selectedCategories.includes(suggestion.category) ? 'selected' : ''}`}
-                        title={`${suggestion.confidence}% match - Keywords: ${suggestion.matchedKeywords.join(', ')}`}
-                      >
-                        {suggestion.category}
-                        <span className="suggestion-confidence">{suggestion.confidence}%</span>
-                      </button>
-                    ))}
-                  </div>
+                <div className="categorize-label">Kategorien</div>
+                <div className="categorize-chips">
+                  {availableCategories.map(cat => (
+                    <button
+                      key={cat}
+                      className={`chip ${selected.includes(cat) ? 'active' : ''}`}
+                      onClick={() => toggle(cat)}
+                      aria-pressed={selected.includes(cat)}
+                    >
+                      {cat}
+                      {post.suggestion?.category === cat && <span className="chip-hint">Vorschlag</span>}
+                    </button>
+                  ))}
                 </div>
-              )}
+                <form className="categorize-new" onSubmit={(e) => { e.preventDefault(); create(); }}>
+                  <input
+                    className="text-input"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Neue Kategorie"
+                    maxLength={50}
+                  />
+                  <button type="submit" className="btn" disabled={newName.trim().length < 2}>Anlegen</button>
+                </form>
 
-              <div className="category-options">
-                {availableCategories.map(category => (
-                  <label
-                    key={category}
-                    className={`category-option ${selectedCategories.includes(category) ? 'selected' : ''}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedCategories.includes(category)}
-                      onChange={() => handleCategoryToggle(category)}
-                    />
-                    <span>{category}</span>
-                  </label>
-                ))}
-                <button
-                  onClick={() => setShowAddCategory(true)}
-                  className="add-category-option"
-                >
-                  + Add New Category
-                </button>
-              </div>
-
-              <div className="notes-section">
-                <h3>Notes (Optional)</h3>
+                <div className="categorize-label">Notiz (optional)</div>
                 <textarea
+                  className="text-input"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Add notes about this post..."
-                  className="notes-input"
+                  placeholder="Notiz zum Beitrag …"
                   rows={3}
                 />
               </div>
             </div>
-          </div>
-        </div>
 
-        <div className="modal-footer">
-          <div className="navigation-buttons">
-            <button
-              onClick={handlePrevious}
-              className="nav-btn"
-              disabled={currentIndex === 0}
-            >
-              ← Previous
-            </button>
-            <button onClick={handleSkip} className="nav-btn skip-btn">
-              Skip
-            </button>
-          </div>
-          <button onClick={handleSave} className="action-btn">
-            {currentIndex < uncategorizedPosts.length - 1 ? 'Save & Next →' : 'Save & Finish'}
-          </button>
-        </div>
+            <footer className="categorize-foot">
+              <button className="btn" onClick={() => go(-1)} disabled={index === 0}>← Zurück</button>
+              <button className="btn" onClick={() => go(1)}>Überspringen</button>
+              <button className="btn btn-primary" onClick={save}>
+                {index < queue.length - 1 ? 'Speichern & weiter' : 'Speichern'}
+              </button>
+            </footer>
+          </>
+        )}
       </div>
-
-      {showAddCategory && (
-        <AddCategoryModal
-          existingCategories={availableCategories}
-          onAdd={handleAddCategory}
-          onCancel={() => setShowAddCategory(false)}
-        />
-      )}
     </div>
   );
 };

@@ -1,6 +1,7 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import type { Post } from '../types';
-import { getMediaUrl } from '../utils/media';
+import { postImageUrl } from '../utils/media';
+import { useOverlay } from '../hooks/useOverlay';
 import './PrintView.css';
 
 interface PrintViewProps {
@@ -8,85 +9,66 @@ interface PrintViewProps {
   onClose: () => void;
 }
 
-const PrintView: React.FC<PrintViewProps> = ({ post, onClose }) => {
-  useEffect(() => {
-    // Auto-trigger print dialog after component mounts
-    const timer = setTimeout(() => {
-      window.print();
-    }, 500);
+/** Printable recipe card (opens the print dialog right away). */
+const PrintView = ({ post, onClose }: PrintViewProps) => {
+  useOverlay(true, onClose);
 
+  useEffect(() => {
+    const timer = setTimeout(() => window.print(), 500);
     return () => clearTimeout(timer);
   }, []);
 
-  const displayUrl = getMediaUrl(post.displayUrl);
+  const displayUrl = postImageUrl(post);
 
   return (
     <div className="print-view-overlay" onClick={onClose}>
       <div className="print-view-modal" onClick={(e) => e.stopPropagation()}>
         <div className="print-header">
-          <h2>Print Recipe</h2>
-          <button onClick={onClose} className="print-close-btn">×</button>
+          <h2>Rezept drucken</h2>
+          <button onClick={onClose} className="icon-btn" aria-label="Schließen">✕</button>
         </div>
 
         <div className="print-preview">
           <div className="print-content">
-            {/* Recipe Title */}
-            <div className="print-title">
-              {post.caption.split('\n')[0] || 'Recipe'}
-            </div>
+            <div className="print-title">{post.caption.split('\n')[0] || 'Rezept'}</div>
 
-            {/* Recipe Image */}
             {displayUrl && (
               <div className="print-image-container">
-                <img
-                  src={displayUrl}
-                  alt={post.altText || post.caption}
-                  className="print-image"
-                />
+                <img src={displayUrl} alt={post.altText || ''} className="print-image" />
               </div>
             )}
 
-            {/* Recipe Details */}
             {post.caption && (
               <div className="print-section">
-                <div className="print-section-title">Recipe</div>
+                <div className="print-section-title">Rezept</div>
                 <div className="print-text">{post.caption}</div>
               </div>
             )}
 
-            {/* Notes */}
             {post.notes && (
               <div className="print-section">
-                <div className="print-section-title">Notes</div>
+                <div className="print-section-title">Notizen</div>
                 <div className="print-text">{post.notes}</div>
               </div>
             )}
 
-            {/* Source */}
             <div className="print-section">
-              <div className="print-section-title">Source</div>
+              <div className="print-section-title">Quelle</div>
               <div className="print-text">
-                From: @{post.owner}
-                {post.postUrl && (
-                  <div className="print-source-url">{post.postUrl}</div>
-                )}
+                Von @{post.owner}
+                {post.postUrl && <div className="print-source-url">{post.postUrl}</div>}
               </div>
             </div>
 
-            {/* Footer */}
             <div className="print-footer">
-              Saved from Instagram on {new Date().toLocaleDateString()}
+              Aus Instagram gespeichert · gedruckt am {new Date().toLocaleDateString('de-DE')}
             </div>
           </div>
         </div>
 
         <div className="print-actions">
-          <button onClick={() => window.print()} className="print-btn">
-            🖨️ Print Recipe
-          </button>
-          <button onClick={onClose} className="cancel-print-btn">
-            Cancel
-          </button>
+          <button onClick={() => window.print()} className="print-btn">🖨 Drucken</button>
+          <button onClick={onClose} className="cancel-print-btn">Abbrechen</button>
         </div>
       </div>
     </div>

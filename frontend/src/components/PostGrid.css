@@ -1,0 +1,29 @@
+.post-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+}
+
+@media (min-width: 600px) {
+  .post-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 3px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .post-grid {
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+  }
+}
+
+.post-list {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+
+.grid-sentinel {
+  height: 1px;
+}

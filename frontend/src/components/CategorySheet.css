@@ -1,0 +1,41 @@
+.category-sheet-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 8px;
+  padding: 4px 0;
+}
+
+.chip-hint {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-light);
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.chip.active .chip-hint {
+  background: rgba(255, 255, 255, 0.25);
+  color: inherit;
+}
+
+.chip-add {
+  border-style: dashed;
+  color: var(--accent-primary);
+}
+
+.category-sheet-new {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.category-sheet-new .btn {
+  flex-shrink: 0;
+}
+
+.category-sheet-error {
+  margin: 8px 0 0;
+  color: var(--error);
+  font-size: 14px;
+}

@@ -1,4 +1,5 @@
 import { API_URL } from '../config';
+import { storageGet, storageRemove, storageSet } from './storage';
 
 const STORAGE_KEY = 'api-secret';
 
@@ -10,26 +11,22 @@ export function setCurrentAccount(account: string): void {
   currentAccount = account;
 }
 
-export function getCurrentAccount(): string {
-  return currentAccount;
-}
-
 // --- Secret management ---
 
 export function getApiSecret(): string {
-  return localStorage.getItem(STORAGE_KEY) || '';
+  return storageGet(STORAGE_KEY) || '';
 }
 
 export function setApiSecret(secret: string): void {
-  localStorage.setItem(STORAGE_KEY, secret);
+  storageSet(STORAGE_KEY, secret);
 }
 
 export function clearApiSecret(): void {
-  localStorage.removeItem(STORAGE_KEY);
+  storageRemove(STORAGE_KEY);
 }
 
 export function hasApiSecret(): boolean {
-  return !!localStorage.getItem(STORAGE_KEY);
+  return !!storageGet(STORAGE_KEY);
 }
 
 // --- Fetch wrapper ---
@@ -41,6 +38,7 @@ export class UnauthorizedError extends Error {
   }
 }
 
+/** Fetch an API path; appends ?account=<current account> when one is selected. */
 export async function apiFetch(
   path: string,
   options: RequestInit = {},
@@ -68,5 +66,15 @@ export async function apiFetch(
     throw new UnauthorizedError();
   }
 
+  return response;
+}
+
+/** JSON helper for write calls: throws on non-2xx so callers can roll back optimistic updates. */
+export async function apiSend(path: string, method: string, body?: unknown): Promise<Response> {
+  const response = await apiFetch(path, {
+    method,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response;
 }

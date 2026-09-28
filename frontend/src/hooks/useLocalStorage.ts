@@ -1,44 +1,25 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { storageGet, storageSet } from '../utils/storage';
 
 /**
- * Custom hook for persisting state in localStorage
- * @param key - localStorage key
- * @param initialValue - Default value if nothing in localStorage
- * @returns [storedValue, setValue] tuple
+ * State persisted in localStorage. Storage errors are swallowed: without storage the value
+ * simply lives in memory for this session.
  */
-export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T | ((val: T) => T)) => void] {
-  // State to store our value
+export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T) => void] {
   const [storedValue, setStoredValue] = useState<T>(() => {
-    if (typeof window === 'undefined') {
-      return initialValue;
-    }
-
+    const item = storageGet(key);
+    if (item === null) return initialValue;
     try {
-      const item = window.localStorage.getItem(key);
-      return item ? JSON.parse(item) : initialValue;
-    } catch (error) {
-      console.error(`Error loading localStorage key "${key}":`, error);
+      return JSON.parse(item) as T;
+    } catch {
       return initialValue;
     }
   });
 
-  // Return a wrapped version of useState's setter function that persists to localStorage
-  const setValue = (value: T | ((val: T) => T)) => {
-    try {
-      // Allow value to be a function for same API as useState
-      const valueToStore = value instanceof Function ? value(storedValue) : value;
-
-      // Save state
-      setStoredValue(valueToStore);
-
-      // Save to localStorage
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(key, JSON.stringify(valueToStore));
-      }
-    } catch (error) {
-      console.error(`Error setting localStorage key "${key}":`, error);
-    }
-  };
+  const setValue = useCallback((value: T) => {
+    setStoredValue(value);
+    storageSet(key, JSON.stringify(value));
+  }, [key]);
 
   return [storedValue, setValue];
 }

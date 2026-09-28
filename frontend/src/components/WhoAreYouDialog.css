@@ -1,0 +1,42 @@
+.who-text {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  font-size: 15px;
+}
+
+.who-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.who-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 110px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  font-weight: 650;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.who-option:active {
+  border-color: var(--accent-primary);
+}
+
+.who-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6452d6, #c2439b);
+  color: #fff;
+  font-size: 22px;
+}
