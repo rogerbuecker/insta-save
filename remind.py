@@ -8,7 +8,7 @@ this script never starts a run and NEVER lifts a cooldown; it only asks Roger.
 
   due (last ok > 7 days, nothing blocks)       → buttons "📥 @acc jetzt laden" (instasave:run:<acc>) + "Später"
   cooldown / no session / last run auth error  → info with the session import how-to
-  service down / < 10 GiB free on /srv         → warning
+  service down / < 10 GiB free on data disk       → warning
 Everything goes into at most ONE Telegram message to Roger; nothing to say → no message.
 
 Usage: remind.py [--dry-run]
@@ -128,9 +128,9 @@ def health():
         active = f"unbekannt ({e})"
     if active != "active":
         problems.append(f"⚠️ {SERVICE} ist nicht aktiv ({active or '?'})")
-    free = shutil.disk_usage("/srv").free
+    free = shutil.disk_usage(sr.DATA_DIR).free  # Datenplatte (sdb), nicht /srv = Container-Rootfs
     if free < MIN_FREE_BYTES:
-        problems.append(f"⚠️ Nur noch {free / 2**30:.1f} GiB frei auf /srv (Warnschwelle 10 GiB)")
+        problems.append(f"⚠️ Nur noch {free / 2**30:.1f} GiB frei auf der Datenplatte {sr.DATA_DIR} (Warnschwelle 10 GiB)")
     return problems
 
 
