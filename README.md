@@ -260,6 +260,35 @@ rm .session-your_username
 - Verify posts were downloaded successfully
 - Check `saved_posts/metadata.json` exists
 
+## Homeserver (LAN) Deployment
+
+Alternative to Cloudflare: one Express process serves the built frontend, the API and the media from a local data directory.
+
+```bash
+cd frontend && npm ci && npm run build   # with VITE_API_URL= and VITE_NO_AUTH=1 in .env.production.local
+PORT=3094 INSTA_SAVE_DATA=/srv/insta-save node server.js
+```
+
+Data layout under `INSTA_SAVE_DATA`: `saved_posts/<account>/`, `sessions/` (0700, cookie sessions 0600), `state/` (lock, per-account state, `runs.jsonl`, logs).
+
+Scraping is manual only — the "🔄 Scraper" button in the app, or:
+
+```bash
+venv/bin/python scrape_run.py --account <user> [--limit 50]   # or --account all
+venv/bin/python scrape_run.py --status
+echo '{"sessionid":"…","ds_user_id":"…"}' | venv/bin/python scrape_run.py --import-session <user>
+venv/bin/python scrape_run.py --clear-cooldown <user>          # deliberate override only
+```
+
+Downloads use **gallery-dl** (`gdl_runner.py`) with an isolated generated config: it reads saved posts via the web app's REST endpoint (`/api/v1/feed/saved/posts/`, 50 per request, web-app headers, no per-post metadata queries). Metadata lands in `saved_posts/<user>/.gdl/` and `indexer.py` converts it to the legacy instaloader JSON shape, so the index and every API endpoint keep working. File names match the legacy downloads, so already-fetched posts are skipped. `insta_scraper.py` / `import_session.py` are the legacy instaloader tools and unused on the homeserver.
+
+Lockout protection in `scrape_run.py` / `gdl_runner.py`:
+- cookie session only (`--config-ignore`, no netrc), never a password login or auto re-login; user agent + browser header profile of the browser the cookie came from
+- no retries (`retries=0`, `sleep-429=0`); any Instagram-side 401/403/429/checkpoint/challenge/login redirect/feedback_required aborts the run and sets a 72 h cooldown for the account (a new session does not lift it); CDN download failures only count as failed files
+- pacing: 8–15 s between API requests, 3–8 s between files; `max-posts` = limit (default 100, hard cap 200); stops after 30 consecutive known files
+- at most one successful run per account per 24 h, accounts run one after another with a 10–20 min gap, global lock
+- refuses to run for an account without an existing `posts-index.json` (no accidental full crawl)
+
 ## Production Deployment
 
 For production use:

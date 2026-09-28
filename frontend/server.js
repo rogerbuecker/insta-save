@@ -3,17 +3,33 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { spawn, execFile } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
+const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(cors());
 app.use(express.json());
 
-const SAVED_POSTS_BASE = path.join(__dirname, '../saved_posts');
+const DATA_DIR = process.env.INSTA_SAVE_DATA;
+const SAVED_POSTS_BASE = DATA_DIR ? path.join(DATA_DIR, 'saved_posts') : path.join(__dirname, '../saved_posts');
+const STATE_DIR = DATA_DIR ? path.join(DATA_DIR, 'state') : path.join(__dirname, '../state');
+const PROJECT_ROOT = path.join(__dirname, '..');
+const PYTHON = process.env.INSTA_SAVE_PYTHON || path.join(PROJECT_ROOT, 'venv/bin/python');
+const SCRAPE_RUN = path.join(PROJECT_ROOT, 'scrape_run.py');
+const ACCOUNT_RE = /^[A-Za-z0-9_.]{1,30}$/;
+
+function scrapeRun(args, input) {
+  return new Promise((resolve) => {
+    const child = execFile(PYTHON, [SCRAPE_RUN, ...args], { cwd: PROJECT_ROOT, env: process.env, timeout: 30000 },
+      (error, stdout, stderr) => resolve({ code: error ? (error.code ?? 1) : 0, stdout, stderr }));
+    if (input !== undefined) child.stdin.end(input);
+  });
+}
 
 // Helper: resolve account-scoped directory (sanitized)
 function getAccountDir(account) {
@@ -469,6 +485,15 @@ app.get('/api/posts/:id/suggest-categories', (req, res) => {
     }
 
     // Sort by confidence and return top 3
+    // Jev assignment (categorize.py) goes first; keyword matches remain as fallback.
+    const auto = readMetadata(account).posts?.[id]?.autoCategory;
+    if (auto?.category) {
+      const rest = suggestions.filter(s => s.category !== auto.category);
+      return res.json([
+        { category: auto.category, confidence: Math.round(auto.confidence * 100), matchedKeywords: ['Jev'] },
+        ...rest.sort((a, b) => b.confidence - a.confidence).slice(0, 2),
+      ]);
+    }
     res.json(suggestions.sort((a, b) => b.confidence - a.confidence).slice(0, 3));
   } catch (error) {
     console.error('Error suggesting categories:', error);
@@ -739,6 +764,139 @@ function extractHashtags(text) {
   return matches ? matches.map(tag => tag.toLowerCase()) : [];
 }
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+// --- Scraper control (manual only, guards live in scrape_run.py) ---
+// Starting runs and importing sessions is loopback-only: the LAN has no auth here,
+// so these go through the authenticated Brain UI module (/insta-save) instead.
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+function loopbackOnly(req, res, next) {
+  if (LOOPBACK.has(req.socket.remoteAddress)) return next();
+  res.status(403).json({ error: 'Nur über Brain UI (/insta-save) möglich' });
+}
+
+// Status straight from the state files scrape_run.py writes — no Python spawn per poll.
+// Mirrors scrape_run.blocked_reason(); scrape_run.py still enforces every guard itself.
+const SESSION_DIR = DATA_DIR ? path.join(DATA_DIR, 'sessions') : path.join(PROJECT_ROOT, 'sessions');
+const MIN_INTERVAL_MS = 24 * 3600 * 1000;
+const postCountCache = new Map();
+
+function readJson(file, fallback = null) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf-8')); } catch { return fallback; }
+}
+
+function fmtBerlin(date) {
+  return date.toLocaleString('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .replace(',', '');
+}
+
+function postCount(account) {
+  const file = path.join(SAVED_POSTS_BASE, account, 'posts-index.json');
+  let mtime;
+  try { mtime = fs.statSync(file).mtimeMs; } catch { return null; }
+  const cached = postCountCache.get(account);
+  if (cached && cached.mtime === mtime) return cached.count;
+  const posts = readJson(file, []);
+  postCountCache.set(account, { mtime, count: posts.length });
+  return posts.length;
+}
+
+function isAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+function blockedReason(account, state, hasSession, posts) {
+  if (!hasSession) return 'keine Session importiert';
+  if (posts === null) return 'kein bestehender Datenbestand (Vollabzug wäre ein Sperr-Risiko)';
+  const now = Date.now();
+  const cooldown = state.cooldown_until ? new Date(state.cooldown_until) : null;
+  if (cooldown && cooldown.getTime() > now) {
+    return `Cooldown bis ${fmtBerlin(cooldown)} (${state.cooldown_reason || ''})`;
+  }
+  const nextAllowed = state.next_allowed ? new Date(state.next_allowed)
+    : state.last_ok ? new Date(new Date(state.last_ok).getTime() + MIN_INTERVAL_MS) : null;
+  if (nextAllowed && nextAllowed.getTime() > now) {
+    return `letzter Lauf < 24 h her, wieder ab ${fmtBerlin(nextAllowed)}`;
+  }
+  return null;
+}
+
+function recentRuns(limit) {
+  try {
+    const lines = fs.readFileSync(path.join(STATE_DIR, 'runs.jsonl'), 'utf-8').trim().split('\n').filter(Boolean);
+    return lines.slice(-limit).reverse().map(line => JSON.parse(line));
+  } catch { return []; }
+}
+
+function scrapeStatus() {
+  const running = readJson(path.join(STATE_DIR, 'running.json'));
+  const accounts = new Set();
+  if (fs.existsSync(SESSION_DIR)) {
+    for (const f of fs.readdirSync(SESSION_DIR)) if (f.endsWith('.cookies.txt')) accounts.add(f.slice(0, -'.cookies.txt'.length));
+  }
+  if (fs.existsSync(SAVED_POSTS_BASE)) {
+    for (const d of fs.readdirSync(SAVED_POSTS_BASE, { withFileTypes: true })) {
+      if (d.isDirectory() && !d.name.startsWith('.')) accounts.add(d.name);
+    }
+  }
+  const out = {
+    running: Boolean(running && isAlive(running.pid)),
+    current: readJson(path.join(STATE_DIR, 'current.json')),
+    accounts: {},
+    recent_runs: recentRuns(10),
+  };
+  for (const account of [...accounts].sort()) {
+    const state = readJson(path.join(STATE_DIR, `${account}.json`), {});
+    const hasSession = fs.existsSync(path.join(SESSION_DIR, `${account}.cookies.txt`));
+    const posts = postCount(account);
+    out.accounts[account] = { ...state, posts, has_session: hasSession, blocked_reason: blockedReason(account, state, hasSession, posts) };
+  }
+  return out;
+}
+
+app.get('/api/scrape/status', (req, res) => {
+  res.json(scrapeStatus());
+});
+
+app.post('/api/scrape', loopbackOnly, async (req, res) => {
+  const accounts = Array.isArray(req.body?.accounts) ? req.body.accounts : [];
+  if (!accounts.length || !accounts.every(a => a === 'all' || ACCOUNT_RE.test(a))) {
+    return res.status(400).json({ error: 'accounts required' });
+  }
+  const limit = Math.min(Math.max(parseInt(req.body?.limit, 10) || 100, 1), 200);
+  if (scrapeStatus().running) {
+    return res.status(409).json({ error: 'Es läuft bereits ein Lauf' });
+  }
+  fs.mkdirSync(path.join(STATE_DIR, 'logs'), { recursive: true });
+  const logFile = path.join(STATE_DIR, 'logs', `${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
+  const out = fs.openSync(logFile, 'a');
+  const args = [SCRAPE_RUN, '--limit', String(limit), ...accounts.flatMap(a => ['--account', a])];
+  const child = spawn(PYTHON, ['-u', ...args], { cwd: PROJECT_ROOT, env: process.env, detached: true, stdio: ['ignore', out, out] });
+  child.unref();
+  fs.closeSync(out);
+  res.status(202).json({ started: true, log: path.basename(logFile) });
+});
+
+app.post('/api/session', loopbackOnly, async (req, res) => {
+  const { sessionid, ds_user_id, csrftoken, mid, user_agent } = req.body || {};
+  const account = String(req.body?.account || '').trim().replace(/^@/, '');
+  const missing = [['Account', account], ['sessionid', sessionid], ['ds_user_id', ds_user_id]]
+    .filter(([, v]) => !String(v || '').trim()).map(([k]) => k);
+  if (missing.length) return res.status(400).json({ error: `Fehlt: ${missing.join(', ')}` });
+  if (!ACCOUNT_RE.test(account)) {
+    return res.status(400).json({ error: 'Ungültiger Account-Name (nur Buchstaben, Zahlen, _ und ., ohne Leerzeichen)' });
+  }
+  const { code, stdout, stderr } = await scrapeRun(['--import-session', account],
+    JSON.stringify({ sessionid, ds_user_id, csrftoken, mid, user_agent }));
+  if (code !== 0) return res.status(400).json({ error: (stderr || stdout).trim() });
+  res.json({ ok: true, message: stdout.trim() });
+});
+
+// Serve the built frontend (production on the homeserver)
+const DIST_DIR = path.join(__dirname, 'dist');
+if (fs.existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+  app.get(/^(?!\/api\/|\/media\/).*/, (req, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
+}
+
+app.listen(PORT, HOST, () => {
+  console.log(`Server running on http://${HOST}:${PORT}`);
 });

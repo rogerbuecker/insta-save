@@ -7,7 +7,9 @@ Scrapes saved posts from your Instagram account
 import instaloader
 import json
 import os
+import random
 import re
+import time
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,14 +17,39 @@ from datetime import datetime
 import sys
 
 
+# Signals that Instagram is suspicious of this session. On any of these the run
+# must stop immediately — retrying is what got @rogermachtblau locked in 06/2026.
+BLOCK_EXCEPTIONS = (
+    instaloader.exceptions.LoginRequiredException,
+    instaloader.exceptions.TooManyRequestsException,
+    instaloader.exceptions.QueryReturnedForbiddenException,
+    instaloader.exceptions.QueryReturnedBadRequestException,
+    instaloader.exceptions.AbortDownloadException,
+)
+BLOCK_PATTERN = re.compile(
+    r'\b(401|403|429)\b|checkpoint|challenge|please wait|login required|not logged in|feedback_required',
+    re.IGNORECASE,
+)
+
+
+class BlockSignal(Exception):
+    """Instagram returned something that looks like a rate limit, checkpoint or dead session."""
+
+
+def is_block_signal(exc):
+    return isinstance(exc, BLOCK_EXCEPTIONS) or bool(BLOCK_PATTERN.search(str(exc)))
+
+
 class InstagramSavedPostsScraper:
-    def __init__(self, username=None, session_file=None):
+    def __init__(self, username=None, session_file=None, user_agent=None, safe_mode=False):
         """
         Initialize the Instagram scraper
 
         Args:
             username: Instagram username
             session_file: Path to session file for authentication
+            user_agent: Browser user agent the session cookie was taken from
+            safe_mode: No retries, human pacing, abort on block signals
         """
         self.loader = instaloader.Instaloader(
             download_videos=True,
@@ -32,7 +59,10 @@ class InstagramSavedPostsScraper:
             save_metadata=True,
             compress_json=False,
             post_metadata_txt_pattern='',
+            max_connection_attempts=1 if safe_mode else 3,
+            user_agent=user_agent,
         )
+        self.safe_mode = safe_mode
         self.username = username
         self.session_file = session_file
 
@@ -297,7 +327,16 @@ class InstagramSavedPostsScraper:
             print(f"Error during login: {str(e)}")
             return False
 
-    def get_saved_posts(self, output_dir="saved_posts", limit=None, full_resync=False):
+    def _human_pause(self, downloaded):
+        """Sleep like a person scrolling: 4–12 s per post, a longer break every ~20 posts."""
+        if not self.safe_mode:
+            return
+        if downloaded and downloaded % 20 == 0:
+            time.sleep(random.uniform(60, 180))
+        else:
+            time.sleep(random.uniform(4, 12))
+
+    def get_saved_posts(self, output_dir="saved_posts", limit=None, full_resync=False, on_progress=None):
         """
         Fetch and download saved posts incrementally.
 
@@ -349,6 +388,8 @@ class InstagramSavedPostsScraper:
                     profile = instaloader.Profile.from_username(self.loader.context, self.username)
                     saved_posts = profile.get_saved_posts()
                 except KeyError as e:
+                    if self.safe_mode:
+                        raise BlockSignal(f"session invalid (unexpected response: {e})") from e
                     print(f"\n✗ Session appears to be invalid (unexpected response: {e})")
                     print(f"  Delete the session file and re-login:")
                     print(f"  rm .session-{self.username}")
@@ -409,9 +450,16 @@ class InstagramSavedPostsScraper:
 
                     print(f"    ✓ Downloaded successfully\n")
 
+                    if on_progress:
+                        on_progress(len(new_posts))
+
                 except Exception as e:
+                    if self.safe_mode and is_block_signal(e):
+                        raise BlockSignal(str(e)) from e
                     print(f"    ✗ Error downloading post: {str(e)}\n")
                     continue
+
+                self._human_pause(len(new_posts))
 
             print(f"\n{'='*50}")
             if is_incremental:
@@ -424,10 +472,15 @@ class InstagramSavedPostsScraper:
                 print(f"  Total posts downloaded: {len(new_posts)}")
             print(f"  Output directory: {output_dir}/")
             print(f"{'='*50}")
+            return {"new": len(new_posts), "skipped": skipped, "checked": checked}
 
-        except instaloader.exceptions.LoginRequiredException:
-            print("Error: Login required. Please login first.")
+        except BlockSignal:
+            raise
         except Exception as e:
+            if self.safe_mode and is_block_signal(e):
+                raise BlockSignal(str(e)) from e
+            if self.safe_mode:
+                raise
             print(f"Error fetching saved posts: {str(e)}")
 
 

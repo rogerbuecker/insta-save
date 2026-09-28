@@ -4,6 +4,7 @@ import SearchFilters from './components/SearchFilters';
 import CategorizationModal from './components/CategorizationModal';
 import DuplicateDetection from './components/DuplicateDetection';
 import SmartCollections from './components/SmartCollections';
+import ScrapePanel from './components/ScrapePanel';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import type { Post, FilterState, SortOption, ViewMode } from './types';
 import { apiFetch, UnauthorizedError, hasApiSecret, setApiSecret, setCurrentAccount } from './utils/api';
@@ -15,7 +16,8 @@ function App() {
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState(hasApiSecret());
+  const [isAuthenticated, setIsAuthenticated] = useState(hasApiSecret() || import.meta.env.VITE_NO_AUTH === '1');
+  const [showScrapePanel, setShowScrapePanel] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [sortOption, setSortOption] = useState<SortOption>('date-desc');
   const [filters, setFilters] = useState<FilterState>({
@@ -262,6 +264,12 @@ function App() {
           >
             🔍 Find Duplicates
           </button>
+          <button
+            onClick={() => setShowScrapePanel(true)}
+            className="duplicate-btn"
+          >
+            🔄 Scraper
+          </button>
         </div>
       </header>
 
@@ -314,6 +322,10 @@ function App() {
           onPostUpdate={handlePostUpdate}
           onCategoryAdd={handleCategoryAdd}
         />
+      )}
+
+      {showScrapePanel && (
+        <ScrapePanel onClose={() => { setShowScrapePanel(false); fetchAccounts(); fetchPosts(); }} />
       )}
 
       {showDuplicateDetection && (
