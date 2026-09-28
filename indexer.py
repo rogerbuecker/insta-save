@@ -13,6 +13,8 @@ import json
 import re
 from pathlib import Path
 
+from make_thumbs import ensure_thumb
+
 GDL_DIR = ".gdl"
 IMAGE_EXTS = ("jpg", "jpeg", "webp", "png", "heic")
 SKIP_FILES = ("metadata.json", "posts-index.json")
@@ -145,6 +147,9 @@ def build_index(output_dir):
                     "dimensions": item.get("dimensions", {"width": 0, "height": 0}),
                 })
 
+        # Grid thumbnail (only created if missing; '' when there is no image or no Pillow)
+        thumb_url = ensure_thumb(output_path, base_id, [c["id"] for c in carousel_items if c["displayUrl"]])
+
         tagged_users = []
         for edge in node.get("edge_media_to_tagged_user", {}).get("edges", []):
             user = edge.get("node", {}).get("user", {})
@@ -160,6 +165,7 @@ def build_index(output_dir):
             "caption": caption,
             "postUrl": f"https://www.instagram.com/p/{node.get('shortcode', '')}/",
             "displayUrl": _media(output_path, base_id, IMAGE_EXTS),
+            "thumbUrl": thumb_url,
             "isVideo": is_video,
             "videoUrl": _media(output_path, base_id, ("mp4",)),
             "owner": node.get("owner", {}).get("username", "unknown"),
@@ -195,7 +201,7 @@ def update_accounts_list(base_dir):
     base = Path(base_dir)
     accounts = sorted([
         d.name for d in base.iterdir()
-        if d.is_dir() and (d / "posts-index.json").exists()
+        if d.is_dir() and not d.name.startswith(".") and (d / "posts-index.json").exists()
     ])
     with open(base / "accounts.json", "w") as f:
         json.dump(accounts, f)

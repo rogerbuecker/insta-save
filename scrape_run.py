@@ -48,6 +48,7 @@ ACCOUNT_GAP_SECONDS = (600, 1200)
 
 NOTIFY_PY = "/opt/vault/venv/bin/python3"
 NOTIFY_DIR = "/opt/vault/Brain/04 Ressourcen/Telegram"
+APP_URL = "http://192.168.178.64:3094"
 
 
 def now():
@@ -170,6 +171,7 @@ def run_account(account, limit):
     write_current({"account": account, "started": started.isoformat(), "new": 0})
     output_dir = POSTS_DIR / account
     result = {"account": account, "started": started.isoformat()}
+    known_ids = post_ids(account)  # for the per-category report only
 
     try:
         stats = gdl_runner.run(
@@ -210,6 +212,10 @@ def run_account(account, limit):
                 result["categorized"] = cat["assigned"]
             except Exception as e:
                 print(f"Kategorisierung übersprungen: {e}")
+        try:
+            result.update(category_summary(account, post_ids(account) - known_ids))
+        except Exception as e:
+            print(f"Kategorie-Übersicht übersprungen: {e}")
         state["last_run"] = now().isoformat()
         state["last_result"] = result.get("status")
         save_state(account, state)
@@ -220,6 +226,36 @@ def run_account(account, limit):
     return result
 
 
+def post_ids(account):
+    try:
+        with open(POSTS_DIR / account / "posts-index.json", encoding="utf-8") as f:
+            return {p["id"] for p in json.load(f) if p.get("id")}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+
+def category_summary(account, new_ids):
+    """New posts per category (after categorize) + open Jev suggestions for the report.
+
+    Open suggestion = autoCategory set but categories still empty (see categorize.py:
+    confidence below min_confidence) — they wait in the app's "Vorschläge" view.
+    """
+    try:
+        with open(POSTS_DIR / account / "metadata.json", encoding="utf-8") as f:
+            posts = json.load(f).get("posts", {})
+    except (FileNotFoundError, json.JSONDecodeError):
+        posts = {}
+    by_cat = {}
+    for pid in new_ids:
+        cats = (posts.get(pid) or {}).get("categories") or ["ohne Kategorie"]
+        for c in cats:
+            by_cat[c] = by_cat.get(c, 0) + 1
+    open_suggestions = sum(1 for e in posts.values()
+                           if e.get("autoCategory") and not e.get("categories"))
+    return {"new_by_category": dict(sorted(by_cat.items(), key=lambda kv: (-kv[1], kv[0]))),
+            "open_suggestions": open_suggestions}
+
+
 def format_report(results):
     lines = ["📥 insta-save Lauf"]
     for r in results:
@@ -228,6 +264,8 @@ def format_report(results):
             failed = f", {r['failed_files']} Datei(en) fehlgeschlagen" if r.get("failed_files") else ""
             cat = f", {r['categorized']} per Jev kategorisiert" if r.get("categorized") else ""
             lines.append(f"✅ {acc}: {r.get('new', 0)} neue Posts{cat}{failed}")
+            if r.get("new_by_category"):
+                lines.append("   " + " · ".join(f"{c} {n}" for c, n in r["new_by_category"].items()))
         elif r["status"] == "blocked":
             lines.append(f"⛔ {acc}: ABGEBROCHEN – Warnsignal von Instagram, {COOLDOWN_HOURS} h Cooldown")
             lines.append(f"   {r.get('reason', '')[:150]}")
@@ -235,6 +273,8 @@ def format_report(results):
             lines.append(f"⏭ {acc}: {r['reason']}")
         else:
             lines.append(f"❌ {acc}: {r.get('reason', '')[:150]}")
+        if r["status"] != "skipped" and r.get("open_suggestions"):
+            lines.append(f"   💡 {r['open_suggestions']} Kategorie-Vorschläge offen → {APP_URL}/#vorschlaege")
     return "\n".join(lines)
 
 
