@@ -301,6 +301,29 @@ function App() {
         }
       },
 
+      deleteCategory: async (name: string) => {
+        try {
+          const res = await apiSend(`/api/categories/${encodeURIComponent(name)}`, 'DELETE');
+          const { categories: rest } = await res.json();
+          setCategories(rest);
+          setPosts(prev => prev.map(p => (
+            p.categories.includes(name) || p.suggestion?.category === name
+              ? {
+                  ...p,
+                  categories: p.categories.filter(c => c !== name),
+                  suggestion: p.suggestion?.category === name ? null : p.suggestion,
+                }
+              : p
+          )));
+          setFilters(f => (f.collection === `cat:${name}` ? { ...f, collection: 'all' } : f));
+          showToast(`Kategorie „${name}" gelöscht`);
+          return true;
+        } catch {
+          showToast('Kategorie konnte nicht gelöscht werden');
+          return false;
+        }
+      },
+
       remove: (post: Post) => {
         setPosts(prev => prev.filter(p => p.id !== post.id));
         const restoreLocal = () => setPosts(prev => (prev.some(p => p.id === post.id) ? prev : [...prev, post]));
@@ -619,6 +642,8 @@ function App() {
             categories={categories}
             onSelect={(collection) => { setFilters({ ...DEFAULT_FILTERS, collection }); switchTab('entdecken'); }}
             onCategorize={() => setShowCategorize(true)}
+            onCreateCategory={actions.createCategory}
+            onDeleteCategory={actions.deleteCategory}
           />
         ) : tab === 'vorschlaege' ? (
           <SuggestionsView

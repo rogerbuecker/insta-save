@@ -3,7 +3,10 @@
 Assign categories to saved posts with Jev (TypeSafe decision model via OpenRouter).
 
 One Jev "choice" call per post (caption, hashtags, owner, location, media type) over the
-categories in <data>/categories.json. Confident answers (>= min_confidence) are written
+account's category list from the app (metadata.json "categories" — so categories added or
+deleted in the app count for the next run). <data>/categories.json supplies the descriptions
+for Jev and seeds accounts that have no list yet; categories without a description are
+offered to Jev by name. Confident answers (>= min_confidence) are written
 as the post's category; less confident ones are only stored as a suggestion
 (metadata.posts[id].autoCategory) and show up in the app's "Categorize" flow.
 
@@ -34,9 +37,12 @@ WORKERS = 2  # Jev (early access) times out under more parallel load (28.09.: 77
 CHECKPOINT_EVERY = 100
 
 
-def load_config():
+def load_config(account):
     cfg = json.loads(CATEGORIES_FILE.read_text(encoding="utf-8"))
-    return cfg["categories"], float(cfg.get("min_confidence", 0.75))
+    described = cfg["categories"]
+    names = read_metadata(account).get("categories") or list(described)
+    categories = {name: described.get(name) or name for name in names}
+    return categories, float(cfg.get("min_confidence", 0.75))
 
 
 def read_metadata(account):
@@ -50,7 +56,8 @@ def merge_metadata(account, results, categories):
     """Re-read metadata.json (the app may have written meanwhile) and apply results atomically."""
     meta = read_metadata(account)
     meta.setdefault("posts", {})
-    meta["categories"] = sorted(set(meta.get("categories", [])) | set(categories))
+    if not meta.get("categories"):
+        meta["categories"] = sorted(categories)  # first run: seed the app's list
     applied = 0
     for post_id, auto in results.items():
         entry = meta["posts"].setdefault(post_id, {"categories": [], "notes": ""})
@@ -120,7 +127,7 @@ def pending_posts(account, redo):
 
 
 def categorize(account, limit=None, redo=False, dry_run=False):
-    categories, min_conf = load_config()
+    categories, min_conf = load_config(account)
     todo = pending_posts(account, redo)
     if limit:
         todo = todo[:limit]

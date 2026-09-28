@@ -585,6 +585,40 @@ app.post('/api/categories', (req, res) => {
   }
 });
 
+// Delete category: removes it from the account's list (= the set categorize.py offers Jev)
+// and from every post of that account. Posts whose automatic Jev assignment/suggestion pointed
+// at it lose the autoCategory, so the next categorize.py run re-evaluates them.
+app.delete('/api/categories/:name', (req, res) => {
+  const account = req.query.account;
+  if (!account) return res.status(400).json({ error: 'account parameter is required' });
+
+  try {
+    const category = req.params.name;
+    const metadata = readMetadata(account);
+    let affected = 0;
+    for (const entry of Object.values(metadata.posts)) {
+      let touched = false;
+      if (Array.isArray(entry.categories) && entry.categories.includes(category)) {
+        entry.categories = entry.categories.filter(c => c !== category);
+        touched = true;
+      }
+      if (entry.autoCategory?.category === category) {
+        delete entry.autoCategory;
+        touched = true;
+      }
+      if (touched) affected++;
+    }
+    const known = metadata.categories.includes(category);
+    if (!known && affected === 0) return res.status(404).json({ error: 'Category not found' });
+    metadata.categories = metadata.categories.filter(c => c !== category);
+    if (!writeMetadata(account, metadata)) return res.status(500).json({ error: 'Failed to delete category' });
+    res.json({ categories: metadata.categories, affected });
+  } catch (error) {
+    console.error('Error deleting category:', error);
+    res.status(500).json({ error: 'Failed to delete category' });
+  }
+});
+
 // Update post metadata — partial merge: only fields present in the body change
 // (categories, notes, favorite, tried, recipe {path, requestedAt}). recipe_bridge.py uses this too.
 app.put('/api/posts/:id/metadata', (req, res) => {

@@ -88,3 +88,45 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+.cat-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cat-new {
+  display: flex;
+  gap: 8px;
+}
+
+.cat-new .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.cat-error,
+.cat-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.cat-error {
+  color: #d33;
+}
+
+.cat-tile-edit {
+  padding-top: 10px;
+  cursor: default;
+}
+
+.cat-delete {
+  margin: 8px 10px 0;
+  min-height: 36px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary, transparent);
+  color: #d33;
+  font-size: 13px;
+  cursor: pointer;
+}

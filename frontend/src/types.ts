@@ -140,6 +140,8 @@ export interface PostActions {
   /** Save categories chosen instead of the suggestion and dismiss the suggestion */
   replaceSuggestion: (post: Post, categories: string[]) => void;
   createCategory: (name: string) => Promise<boolean>;
+  /** Delete a category from the list and from all posts; resolves false on failure */
+  deleteCategory: (name: string) => Promise<boolean>;
   remove: (post: Post) => void;
   requestRecipe: (post: Post) => void;
   share: (post: Post) => void;
