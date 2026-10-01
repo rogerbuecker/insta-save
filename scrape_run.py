@@ -44,6 +44,10 @@ DEFAULT_LIMIT = 100
 MAX_LIMIT = 200
 COOLDOWN_HOURS = 72
 MIN_INTERVAL_HOURS = 24
+# @rogermachtblau is the business account that is also used by hand: scrape it rarely.
+MIN_INTERVAL_OVERRIDES = {"rogermachtblau": 14 * 24}
+SESSION_CHECK_URL = "https://www.instagram.com/api/v1/accounts/current_user/?edit=true"
+IMPORT_COOKIES = ("sessionid", "ds_user_id", "csrftoken", "mid", "ig_did", "datr", "rur")
 ACCOUNT_GAP_SECONDS = (600, 1200)
 
 NOTIFY_PY = "/opt/vault/venv/bin/python3"
@@ -100,6 +104,10 @@ def notify(text):
         print(f"Telegram notify failed: {e}")
 
 
+def min_interval_hours(account):
+    return MIN_INTERVAL_OVERRIDES.get(account, MIN_INTERVAL_HOURS)
+
+
 def cookies_file(account):
     return SESSION_DIR / f"{account}.cookies.txt"
 
@@ -120,9 +128,13 @@ def import_session(account):
     if not re.fullmatch(r"[A-Za-z0-9_.]{1,30}", account or ""):
         raise SystemExit("Ungültiger Account-Name")
     data = json.load(sys.stdin)
-    cookies = {k: str(data[k]).strip() for k in ("sessionid", "ds_user_id", "csrftoken", "mid") if data.get(k)}
+    cookies = {k: str(data[k]).strip() for k in IMPORT_COOKIES if data.get(k)}
     if not all(cookies.get(k) for k in ("sessionid", "ds_user_id")):
         raise SystemExit("sessionid und ds_user_id sind Pflicht")
+    if not cookies.get("csrftoken"):
+        raise SystemExit("csrftoken fehlt — ohne ihn lehnt Instagram die Session ab. "
+                         "Am einfachsten den kompletten Cookie-Header einfügen.")
+    warnings = [f"{k} fehlt" for k in ("mid", "ig_did") if not cookies.get(k)]
     expires = int((now() + timedelta(days=365)).timestamp())
     cookies_txt = "# Netscape HTTP Cookie File\n" + "".join(
         f".instagram.com\tTRUE\t/\tTRUE\t{expires}\t{name}\t{value}\n" for name, value in cookies.items())
@@ -140,8 +152,14 @@ def import_session(account):
         with os.fdopen(fd, "wb") as f:
             f.write(payload)
         os.chmod(path, 0o600)
-    # A fresh session is a deliberate human action — but it does NOT lift a cooldown.
-    print(f"Session für {account} gespeichert")
+    # A fresh session is a deliberate human action — it clears the dead-session flag, NOT a cooldown.
+    st = load_state(account)
+    if st.pop("session_invalid", None):
+        save_state(account, st)
+    print(f"Session für {account} gespeichert ({len(cookies)} Cookies)")
+    if warnings:
+        print("⚠️ " + ", ".join(warnings) + " — Geräte-Cookies fehlen, die Session wirkt auf Instagram unbekannt "
+              "und hält erfahrungsgemäß schlechter.")
 
 
 def blocked_reason(account, state):
@@ -150,14 +168,52 @@ def blocked_reason(account, state):
         return "keine Session importiert"
     if not (POSTS_DIR / account / "posts-index.json").exists():
         return "kein bestehender Datenbestand (Vollabzug wäre ein Sperr-Risiko)"
+    if state.get("session_invalid"):
+        return f"Session ungültig seit {parse_ts(state['session_invalid']).astimezone():%d.%m. %H:%M} — neu importieren"
     cooldown = parse_ts(state.get("cooldown_until"))
     if cooldown and cooldown > now():
         return f"Cooldown bis {cooldown.astimezone():%d.%m. %H:%M} ({state.get('cooldown_reason', '')})"
     last_ok = parse_ts(state.get("last_ok"))
-    if last_ok and now() - last_ok < timedelta(hours=MIN_INTERVAL_HOURS):
-        next_ok = last_ok + timedelta(hours=MIN_INTERVAL_HOURS)
-        return f"letzter Lauf < {MIN_INTERVAL_HOURS} h her, wieder ab {next_ok.astimezone():%d.%m. %H:%M}"
+    hours = min_interval_hours(account)
+    if last_ok and now() - last_ok < timedelta(hours=hours):
+        next_ok = last_ok + timedelta(hours=hours)
+        return f"letzter Lauf < {hours} h her, wieder ab {next_ok.astimezone():%d.%m. %H:%M}"
     return None
+
+
+def session_alive(account):
+    """One read-only request: does Instagram still accept this session? True/False, None = unclear.
+
+    Only a clear login redirect/401 counts as dead; network errors decide nothing.
+    """
+    import urllib.error
+    import urllib.request
+
+    cookies = {}
+    for line in cookies_file(account).read_text().splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 7 and not line.startswith("#"):
+            cookies[parts[5]] = parts[6]
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    req = urllib.request.Request(SESSION_CHECK_URL, headers={
+        "User-Agent": session_meta(account).get("user_agent") or "Mozilla/5.0",
+        "X-IG-App-ID": "936619743392459",
+        "X-CSRFToken": cookies.get("csrftoken", ""),
+        "Cookie": "; ".join(f"{k}={v}" for k, v in cookies.items()),
+    })
+    try:
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as r:
+            return r.status == 200
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308, 401):
+            return False
+        return None
+    except Exception:
+        return None
 
 
 def run_account(account, limit):
@@ -166,6 +222,17 @@ def run_account(account, limit):
     if reason:
         print(f"[{account}] übersprungen: {reason}")
         return {"account": account, "status": "skipped", "reason": reason}
+
+    if session_alive(account) is False:
+        state["session_invalid"] = now().isoformat()
+        state["last_run"] = now().isoformat()
+        state["last_result"] = "session_invalid"
+        save_state(account, state)
+        reason = "Session von Instagram abgelehnt (Login-Weiterleitung) — bitte neu importieren, es wurde nichts gescraped"
+        result = {"account": account, "status": "error", "reason": reason,
+                  "started": now().isoformat(), "finished": now().isoformat()}
+        log_run(result)
+        return result
 
     started = now()
     write_current({"account": account, "started": started.isoformat(), "new": 0})
@@ -186,7 +253,7 @@ def run_account(account, limit):
         )
         result.update(status="ok", **stats)
         state["last_ok"] = now().isoformat()
-        state["next_allowed"] = (now() + timedelta(hours=MIN_INTERVAL_HOURS)).isoformat()
+        state["next_allowed"] = (now() + timedelta(hours=min_interval_hours(account))).isoformat()
     except Exception as e:
         # Second line of defence: anything that smells like a block counts as one.
         if isinstance(e, BlockSignal) or is_block_signal(e):

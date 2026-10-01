@@ -26,6 +26,7 @@ import scrape_run as sr
 
 ROGER = 419207556
 DUE_DAYS = 7
+DUE_DAYS_OVERRIDES = {"rogermachtblau": 14}  # Geschäftsaccount: seltener (siehe scrape_run.MIN_INTERVAL_OVERRIDES)
 MIN_FREE_BYTES = 10 * 2**30
 SERVICE = "insta-save.service"
 BRAIN_UI = "http://192.168.178.64:3090/insta-save"
@@ -112,7 +113,7 @@ def check_account(acc, last, last_ok, running):
         info["decision"] = "session"
     elif running or info["blocked_reason"]:
         info["decision"] = "blocked"
-    elif last_ok_ts is None or sr.now() - last_ok_ts > timedelta(days=DUE_DAYS):
+    elif last_ok_ts is None or sr.now() - last_ok_ts > timedelta(days=DUE_DAYS_OVERRIDES.get(acc, DUE_DAYS)):
         info["decision"] = "due"
     else:
         info["decision"] = "ok"

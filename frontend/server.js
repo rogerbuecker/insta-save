@@ -1173,10 +1173,11 @@ function blockedReason(account, state, hasSession, posts) {
   if (cooldown && cooldown.getTime() > now) {
     return `Cooldown bis ${fmtBerlin(cooldown)} (${state.cooldown_reason || ''})`;
   }
+  if (state.session_invalid) return `Session ungültig seit ${fmtBerlin(new Date(state.session_invalid))} — neu importieren`;
   const nextAllowed = state.next_allowed ? new Date(state.next_allowed)
     : state.last_ok ? new Date(new Date(state.last_ok).getTime() + MIN_INTERVAL_MS) : null;
   if (nextAllowed && nextAllowed.getTime() > now) {
-    return `letzter Lauf < 24 h her, wieder ab ${fmtBerlin(nextAllowed)}`;
+    return `letzter Lauf zu kurz her, wieder ab ${fmtBerlin(nextAllowed)}`;
   }
   return null;
 }
@@ -1238,7 +1239,7 @@ app.post('/api/scrape', loopbackOnly, async (req, res) => {
 });
 
 app.post('/api/session', loopbackOnly, async (req, res) => {
-  const { sessionid, ds_user_id, csrftoken, mid, user_agent } = req.body || {};
+  const { sessionid, ds_user_id, csrftoken, mid, ig_did, datr, rur, user_agent } = req.body || {};
   const account = String(req.body?.account || '').trim().replace(/^@/, '');
   const missing = [['Account', account], ['sessionid', sessionid], ['ds_user_id', ds_user_id]]
     .filter(([, v]) => !String(v || '').trim()).map(([k]) => k);
@@ -1247,7 +1248,7 @@ app.post('/api/session', loopbackOnly, async (req, res) => {
     return res.status(400).json({ error: 'Ungültiger Account-Name (nur Buchstaben, Zahlen, _ und ., ohne Leerzeichen)' });
   }
   const { code, stdout, stderr } = await scrapeRun(['--import-session', account],
-    JSON.stringify({ sessionid, ds_user_id, csrftoken, mid, user_agent }));
+    JSON.stringify({ sessionid, ds_user_id, csrftoken, mid, ig_did, datr, rur, user_agent }));
   if (code !== 0) return res.status(400).json({ error: (stderr || stdout).trim() });
   res.json({ ok: true, message: stdout.trim() });
 });
