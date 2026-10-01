@@ -199,7 +199,9 @@ def blocked_reason(account, state):
 def session_alive(account):
     """One read-only request: does Instagram still accept this session? True/False, None = unclear.
 
-    Only a clear login redirect/401 counts as dead; network errors decide nothing.
+    Only a redirect to the login page or a 401 counts as dead. Any other answer (e.g. a 302 to the
+    start page, which this endpoint gives non-browser clients even for live sessions) decides nothing;
+    the real gallery-dl run detects a dead session itself and then triggers the cooldown.
     """
     import urllib.error
     import urllib.request
@@ -224,7 +226,7 @@ def session_alive(account):
         with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as r:
             return r.status == 200
     except urllib.error.HTTPError as e:
-        if e.code in (301, 302, 303, 307, 308, 401):
+        if e.code == 401 or "/accounts/login" in (e.headers.get("Location") or ""):
             return False
         return None
     except Exception:
