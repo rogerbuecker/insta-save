@@ -162,6 +162,21 @@ def import_session(account):
               "und hält erfahrungsgemäß schlechter.")
 
 
+def init_account(account):
+    """Create an empty data set for a new account — the deliberate human step that allows its first run."""
+    if not re.fullmatch(r"[A-Za-z0-9_.]{1,30}", account or ""):
+        raise SystemExit("Ungültiger Account-Name")
+    account_dir = POSTS_DIR / account
+    if (account_dir / "posts-index.json").exists():
+        print(f"{account} ist bereits eingerichtet ({post_count(account)} Posts)")
+        return
+    account_dir.mkdir(parents=True, exist_ok=True)
+    (account_dir / "posts-index.json").write_text("[]")
+    indexer.update_accounts_list(POSTS_DIR)
+    print(f"Account {account} angelegt. Nächster Schritt: Session importieren, dann ersten Lauf starten "
+          f"(max. {DEFAULT_LIMIT} neueste Saves).")
+
+
 def blocked_reason(account, state):
     """Return why this account must not run right now, or None."""
     if not cookies_file(account).exists():
@@ -397,6 +412,7 @@ def main():
     parser.add_argument("--status", action="store_true", help="Status als JSON ausgeben")
     parser.add_argument("--clear-cooldown", metavar="ACCOUNT", help="Cooldown bewusst aufheben")
     parser.add_argument("--import-session", metavar="ACCOUNT", help="Cookies als JSON von stdin importieren")
+    parser.add_argument("--init-account", metavar="ACCOUNT", help="neuen Account anlegen (erlaubt den ersten Lauf)")
     parser.add_argument("--no-notify", action="store_true", help="keine Telegram-Meldung")
     args = parser.parse_args()
 
@@ -408,6 +424,10 @@ def main():
 
     if args.import_session:
         import_session(args.import_session)
+        return 0
+
+    if args.init_account:
+        init_account(args.init_account)
         return 0
 
     if args.clear_cooldown:
